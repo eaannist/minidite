@@ -23,105 +23,95 @@
     "break",
     {
       "type": "host",
-      "key": " PC",
+      "key": "+ PC",
       "keyColor": "red"
     },
     {
       "type": "cpu",
-      "key": "├ ",
+      "key": "- cpu: ",
       "showPeCoreCount": true,
       "keyColor": "red"
     },
     {
       "type": "gpu",
-      "key": "├ ",
+      "key": "- gpu: ",
       "detectionMethod": "pci",
       "keyColor": "red"
     },
     {
       "type": "display",
-      "key": "├ ",
+      "key": "- display: ",
       "keyColor": "red"
     },
     {
       "type": "disk",
-      "key": "├ ",
+      "key": "- disk: ",
       "keyColor": "red"
     },
     {
       "type": "memory",
-      "key": "├ ",
-      "keyColor": "red"
-    },
-    {
-      "type": "swap",
-      "key": "└ ",
+      "key": "- memory: ",
       "keyColor": "red"
     },
     "break",
     {
       "type": "command",
-      "key": " OS",
+      "key": "+ OS",
       "keyColor": "yellow",
-      "text": "cat ~/minidite-version 2>/dev/null || echo 'minidite'"
+      "text": "cat \"${HOME}/minidite-version\" 2>/dev/null | sed 's/^/v/' || echo 'vN/A'"
     },
     {
       "type": "command",
-      "key": "├ ",
+      "key": "- distro: ",
       "keyColor": "yellow",
       "text": "uname -r"
     },
     {
       "type": "kernel",
-      "key": "├ ",
+      "key": "- kernel: ",
       "keyColor": "yellow"
     },
     {
       "type": "wm",
-      "key": "├ ",
+      "key": "- wm: ",
       "keyColor": "yellow"
     },
     {
       "type": "de",
-      "key": " DE",
+      "key": "+ DE",
       "keyColor": "yellow"
     },
     {
       "type": "terminal",
-      "key": "├ ",
+      "key": "- terminal: ",
       "keyColor": "yellow"
     },
     {
       "type": "packages",
-      "key": "├ ",
+      "key": "- packages: ",
       "keyColor": "yellow"
     },
     {
       "type": "wmtheme",
-      "key": "├ ",
+      "key": "- wmtheme: ",
       "keyColor": "yellow"
     },
     {
       "type": "command",
-      "key": "├ ",
+      "key": "- author: ",
       "keyColor": "yellow",
-      "text": "echo 'minidite'"
-    },
-    {
-      "type": "terminalfont",
-      "key": "└ ",
-      "keyColor": "yellow"
+      "text": "echo 'eaannist'"
     },
     "break",
     {
       "type": "command",
-      "key": " OS Age",
+      "key": "- age: ",
       "keyColor": "blue",
       "text": "birth_install=$(stat -c %W / 2>/dev/null); current=$(date +%s); time_progression=$((current - birth_install)); days_difference=$((time_progression / 86400)); echo ${days_difference:-0} days"
     },
     {
       "type": "uptime",
-      "key": " Uptime",
+      "key": "- uptime: ",
       "keyColor": "blue"
     },
     "break"

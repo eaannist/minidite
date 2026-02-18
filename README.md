@@ -15,10 +15,10 @@ Minimal Arch Linux server: interactive install and setup. Kept as light as possi
 
 ```bash
 # 1. Install (Arch ISO, root)
-curl -fsSL https://pages.acridite.cc/minidite/install | bash
+curl -fsSL x.acridite.cc/minidite/install | bash
 
 # 2. Reboot, then (as user)
-curl -fsSL https://pages.acridite.cc/minidite/setup | bash
+curl -fsSL x.acridite.cc/minidite/setup | bash
 exec bash
 ```
 
@@ -31,11 +31,16 @@ Run once as **root** from an Arch Linux live ISO. It performs a minimal installa
 1. **Interactive prompts:** disk (with confirmation), hostname, username, password, locale (it_IT / en_US / custom), timezone (Europe/Rome, Europe/London, America/New_York, or custom), mirror region (from locale or Italy/Germany/US/UK/custom), firmware (full / auto-detect from hardware / none). Summary and final confirm before proceeding.
 2. **Network check:** verifies connectivity (ping) before installing.
 3. **Mirrorlist:** if a country was chosen, downloads mirrorlist for that country (HTTPS, mirror status) and uses it for pacman.
-4. **Partitioning:** GPT table, EFI partition 256 MiB (FAT32), remaining space as single root partition (ext4). ESP flag set on EFI.
-5. **Base install:** `pacstrap` with the minimal package list below (firmware only if selected).
-6. **Chroot configuration:** timezone, single locale in locale.gen (only the one chosen), LANG/LC_COLLATE, vconsole KEYMAP, hostname, `/etc/hosts`, GRUB (EFI), `systemctl enable` for NetworkManager only. User created with wheel, bash as shell, sudo NOPASSWD. `~/.ssh` created and permissions set (for later use by setup). Root shell set to bash. Pacman cache cleared in chroot.
-7. **Directories:** creates `~/.config`, `~/.local/bin`, `~/.cache` for the new user and sets ownership.
-8. **Unmount** and prints next steps (reboot, login, run setup; OpenSSH can be installed in setup).
+4. **Partitioning:** GPT table, EFI partition 256 MiB (FAT32), remaining space as single root partition (Btrfs). ESP flag set on EFI.
+5. **Btrfs:** root partition is formatted Btrfs; subvolumes `@` (root) and `@home` (home) are created. Mount options: `compress=zstd:3`, `noatime`, `discard=async`, `ssd`, `commit=120`. No reserved blocks (unlike ext4 5%); compression saves space on disk.
+6. **Base install:** `pacstrap` (cache on target; cleared in chroot), minimal package list below (firmware only if selected).
+7. **Chroot configuration:** timezone, single locale, KEYMAP, hostname, `/etc/hosts`, journald 50M limit, GRUB (EFI), `mkinitcpio -P` (Btrfs in initramfs), NetworkManager, user, sudo, `~/.ssh`. Pacman cache cleared in chroot.
+8. **Directories:** creates `~/.config`, `~/.local/bin`, `~/.cache` for the new user and ownership.
+9. **Unmount** and next steps (reboot, login, run setup).
+
+**Btrfs layout and options:** Root partition is Btrfs with two subvolumes: `@` (/) and `@home` (/home). This allows future snapshots of root and home separately. Options: `compress=zstd:3` (good compression/speed balance), `noatime` (fewer writes), `discard=async` (SSD TRIM), `ssd`, `commit=120` (batch commits for stability).
+
+**Disk usage and what to expect:** (1) **No 5% reserved** – Btrfs does not reserve blocks like ext4, so the full partition is usable. (2) **Compression** – zstd:3 typically yields 30–50% space savings on text/config/code; binaries compress less. Overall you can expect **~20–40% less space used** than the same data on ext4 (depends on workload). (3) **Firmware** – same as before (Full/Auto/None). (4) **Pacman cache** – cleared at end of install and after setup. (5) **Journal** – 50M limit. **Stability:** Btrfs is CoW and checksums data; `commit=120` reduces sync frequency. For a typical minimal install + setup, expect **~2–4 GB used** on disk (VM or real hardware with Auto firmware); with compression the same content may report **~1.5–3 GB** "used" in `df`/Btrfs tools.
 
 **Packages installed (pacstrap):**
 
@@ -63,9 +68,12 @@ Run as **normal user** after first login (after install.sh and reboot). Optional
 3. **Configs:** downloads from repo `home/` into `$HOME` (`.bashrc`, theme.omp.json, micro/fastfetch configs, minidite-version). If setup was already run (detected via "minidite" in `.bashrc`), asks before overwriting.
 4. **OpenSSH server (optional):** asks to install and configure OpenSSH; if yes, installs openssh, appends ClientAliveInterval/etc. to `sshd_config`, enables and starts sshd.
 5. **SSH keys:** if no key exists, offers to generate `id_ed25519` and add to `authorized_keys`. If key exists but `authorized_keys` is empty, offers to add it. If both present, step is skipped.
-6. **Optional Docker:** install Docker (engine + compose), enable docker.service, add user to group docker.
-7. **Optional Podman:** install Podman via pacman.
-8. **Oh My Posh:** if the binary is missing, install to `~/.local/bin` via the official script.
+6. **Optional Docker:** install Docker (engine + compose), enable docker.service, add user to group docker; if Docker is installed, lazydocker (TUI) is installed to `~/.local/bin`.
+7. **Optional Podman:** install Podman; post-install: unqualified-search registries (docker.io), subuid/subgid for rootless if missing, user socket (podman.socket) for Docker-compatible API.
+8. **Lazydocker (optional):** if Docker or Podman is installed, offers to install lazydocker to `~/.local/bin`.
+9. **Oh My Posh:** if the binary is missing, install to `~/.local/bin` via the official script.
+10. **Pacman cache:** cleared at end to free disk space (setup downloads many packages).
+11. **Post-setup:** orphan packages removed (`pacman -Rns $(pacman -Qdtq)`), `fstrim.timer` enabled (weekly TRIM for SSD), `paccache.timer` enabled if pacman-contrib is installed (weekly cache cleanup).
 
 **Packages installed (pacman):**
 
@@ -120,7 +128,8 @@ Run as **normal user** after first login (after install.sh and reboot). Optional
 
 ## Links
 
-- **Bootstrap:** https://pages.acridite.cc/minidite/install and https://pages.acridite.cc/minidite/setup
+- **Install:** https://x.acridite.cc/minidite/install
+- **Setup:** https://x.acridite.cc/minidite/setup
 - **Repo:** https://github.com/eaannist/minidite
 
 MIT.
