@@ -1,0 +1,6 @@
+{
+    "mouse": true,
+    "keymenu": true,
+    "paste": true,
+    "clipboard": "terminal"
+}

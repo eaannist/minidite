@@ -20,34 +20,45 @@ log_ask()   { echo -e "${BLUE}[?]${NC} $1"; }
 
 show_logo() {
   echo -e "${CYAN}"
-  echo '                                              ;                                  '
-  echo '                                              ED.                                '
-  echo '                           L.                 E#Wi                             ,; '
-  echo '                       t   EW:        ,ft t   E###G.       t                 f#i '
-  echo '            ..       : Ej  E##;       t#E Ej  E#fD#W;      Ej GEEEEEEEL    .E#t  '
-  echo '           ,W,     .Et E#, E###t      t#E E#, E#t t##L     E#,,;;L#K;;.   i#W,   '
-  echo '          t##,    ,W#t E#t E#fE#f     t#E E#t E#t  .E#K,   E#t   t#E     L#D.    '
-  echo '         L###,   j###t E#t E#t D#G    t#E E#t E#t    j##f  E#t   t#E   :K#Wfff;  '
-  echo '       .E#j##,  G#fE#t E#t E#t  f#E.  t#E E#t E#t    :E#K: E#t   t#E   i##WLLLLt '
-  echo '      ;WW; ##,:K#i E#t E#t E#t   t#K: t#E E#t E#t   t##L   E#t   t#E    .E#L     '
-  echo '     j#E.  ##f#W,  E#t E#t E#t    ;#W,t#E E#t E#t .D#W;    E#t   t#E      f#E:    '
-  echo '   .D#L    ###K:   E#t E#t E#t     :K#D#E E#t E#tiW#G.     E#t   t#E       ,WW;   '
-  echo '  :K#t     ##D.    E#t E#t E#t      .E##E E#t E#K##i       E#t   t#E        .D#;  '
-  echo '  ...      #G      ..  E#t ..         G#E E#t E##D.        E#t    fE          tt  '
-  echo '           j           ,;.             fE ,;. E#t          ,;.     :              '
-  echo '                                        ,     L:                                 '
+  echo -e '
+                                            
+██▄  ▄██ ▄▄ ▄▄  ▄▄ ▄▄ ▄▄▄▄  ▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄ 
+██ ▀▀ ██ ██ ███▄██ ██ ██▀██ ██   ██   ██▄▄  
+██    ██ ██ ██ ▀██ ██ ████▀ ██   ██   ██▄▄▄ 
+                                            
+'
   echo -e "${NC}"
 }
 
 [[ $EUID -eq 0 ]] || { log_err "Run as root"; exit 1; }
 
-list_disks()  { lsblk -d -n -o NAME,SIZE,TYPE | grep -E 'disk|nvme' | awk '{print "/dev/" $1 " (" $2 ")"}'; }
+# List disks as "NAME SIZE"; used to build numbered menu
+list_disks_raw() { lsblk -d -n -o NAME,SIZE,TYPE | awk '$3=="disk" {print $1, $2}'; }
 valid_disk()  { [[ -b "$1" ]] && lsblk -d -n -o NAME "$1" &>/dev/null; }
 valid_user()  { [[ "$1" =~ ^[a-z_][a-z0-9_-]*$ ]] && [[ ${#1} -ge 3 && ${#1} -le 32 ]]; }
 valid_host()  { [[ "$1" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]] && [[ ${#1} -le 63 ]]; }
 keymap_for()  { case "$1" in *it_IT*) echo it;; *en_US*) echo us;; *de_DE*) echo de;; *fr_FR*) echo fr;; *es_ES*) echo es;; *) echo us;; esac; }
 list_locales(){ grep -E '^#?[a-z]{2}_[A-Z]{2}\.UTF-8' /etc/locale.gen 2>/dev/null | sed 's/^#//' | awk '{print $1}' | head -20; }
 list_tz()     { find /usr/share/zoneinfo -type f ! -name "*.tab" 2>/dev/null | sed 's|/usr/share/zoneinfo/||' | sort | head -30; }
+
+# Detect firmware packages needed for current hardware (lspci vendor IDs -> Arch split packages)
+detect_firmware_packages() {
+  local v pkg
+  lspci -nn 2>/dev/null | sed -n 's/.*\[\([0-9a-f]*\):.*/\1/p' | tr '[:upper:]' '[:lower:]' | sort -u | while read -r v; do
+    case "$v" in
+      8086) echo "linux-firmware-intel" ;;
+      10ec) echo "linux-firmware-realtek" ;;
+      168c) echo "linux-firmware-atheros" ;;
+      1002) echo "linux-firmware-amdgpu"; echo "linux-firmware-radeon" ;;
+      14e4) echo "linux-firmware-broadcom" ;;
+      10de) echo "linux-firmware-nvidia" ;;
+      1b4b) echo "linux-firmware-marvell" ;;
+      17cb) echo "linux-firmware-qcom" ;;
+      14c3) echo "linux-firmware-mediatek" ;;
+      *)    ;;
+    esac
+  done | sort -u | tr '\n' ' ' | sed 's/ *$//'
+}
 
 # ---- UI ----
 clear
@@ -57,21 +68,27 @@ echo ""
 log_info "Choose disk, hostname, user, password, locale and timezone."
 echo ""
 
-# Disk
+# Disk (numbered selection)
+mapfile -t _disk_list < <(list_disks_raw)
+[[ ${#_disk_list[@]} -eq 0 ]] && { log_err "No disks found"; exit 1; }
 log_info "Disks:"
-list_disks
+for i in "${!_disk_list[@]}"; do
+  n=$((i+1)); name="${_disk_list[i]%% *}"; size="${_disk_list[i]#* }"
+  echo "  ${n}) /dev/${name} (${size})"
+done
 echo ""
 while true; do
-  log_ask "Disk to use (e.g. /dev/sda): "
-  read -r DISK </dev/tty
-  DISK=$(echo "$DISK" | tr -d ' ')
-  if valid_disk "$DISK"; then
+  log_ask "Select disk (1-${#_disk_list[@]}): "
+  read -r num </dev/tty
+  num=$(echo "$num" | tr -d ' ')
+  if [[ "$num" =~ ^[0-9]+$ ]] && [[ "$num" -ge 1 && "$num" -le "${#_disk_list[@]}" ]]; then
+    DISK="/dev/${_disk_list[$((num-1))]%% *}"
     log_warn "All data on ${DISK} will be erased."
     log_ask "Continue? (yes/no): "
     read -r c </dev/tty
     [[ "$c" =~ ^[Yy][Ee][Ss]$ ]] && break
   else
-    log_err "Invalid disk"
+    log_err "Invalid choice (enter a number 1-${#_disk_list[@]})"
   fi
 done
 
@@ -98,7 +115,7 @@ while true; do
 done
 
 echo ""
-log_info "Locale: 1) it_IT.UTF-8  2) en_US.UTF-8  3) Custom"
+log_info "System language (LANG/locale): 1) Italian (it_IT.UTF-8)  2) English (en_US.UTF-8)  3) Custom"
 log_ask "Choice (1-3, default 1): "
 read -r lc </dev/tty
 lc=${lc:-1}
@@ -107,6 +124,21 @@ case "$lc" in
   2) LOCALE="en_US.UTF-8" ;;
   3) log_info "Examples:"; list_locales; log_ask "Locale: "; read -r LOCALE </dev/tty ;;
   *) LOCALE="it_IT.UTF-8" ;;
+esac
+
+log_info "Keyboard layout: 1) Italian (it)  2) US (us)  3) Same as system language  4) German (de)  5) French (fr)  6) Spanish (es)  7) Custom"
+log_ask "Choice (1-7, default 1): "
+read -r km </dev/tty
+km=${km:-1}
+case "$km" in
+  1) KEYMAP="it" ;;
+  2) KEYMAP="us" ;;
+  3) KEYMAP=$(keymap_for "$LOCALE") ;;
+  4) KEYMAP="de" ;;
+  5) KEYMAP="fr" ;;
+  6) KEYMAP="es" ;;
+  7) log_ask "Keymap (e.g. it, us): "; read -r KEYMAP </dev/tty; KEYMAP=$(echo "${KEYMAP:-us}" | tr -d ' '); [[ -z "$KEYMAP" ]] && KEYMAP="us" ;;
+  *) KEYMAP="it" ;;
 esac
 
 log_info "Timezone: 1) Europe/Rome  2) Europe/London  3) America/New_York  4) Custom"
@@ -121,7 +153,47 @@ case "$tz" in
   *) TIMEZONE="Europe/Rome" ;;
 esac
 
-KEYMAP=$(keymap_for "$LOCALE")
+# Mirror region: from locale or interactive
+mirror_country_from_locale() {
+  case "$1" in
+    it_IT*) echo "IT" ;;
+    en_US*) echo "US" ;;
+    en_GB*) echo "GB" ;;
+    de_DE*) echo "DE" ;;
+    fr_FR*) echo "FR" ;;
+    es_ES*) echo "ES" ;;
+    *) echo "" ;;
+  esac
+}
+echo ""
+_mc=$(mirror_country_from_locale "$LOCALE"); _mclabel="${_mc:-all}"
+log_info "Mirror region: 1) From locale (${LOCALE} -> ${_mclabel})  2) Italy  3) Germany  4) US  5) UK  6) All (no change)  7) Custom (2-letter code)"
+log_ask "Choice (1-7, default 1): "
+read -r mr </dev/tty
+mr=${mr:-1}
+case "$mr" in
+  1) MIRROR_COUNTRY=$(mirror_country_from_locale "$LOCALE"); [[ -z "$MIRROR_COUNTRY" ]] && MIRROR_COUNTRY="all" ;;
+  2) MIRROR_COUNTRY="IT" ;;
+  3) MIRROR_COUNTRY="DE" ;;
+  4) MIRROR_COUNTRY="US" ;;
+  5) MIRROR_COUNTRY="GB" ;;
+  6) MIRROR_COUNTRY="all" ;;
+  7) log_ask "Country code (e.g. IT, FR): "; read -r MIRROR_COUNTRY </dev/tty; MIRROR_COUNTRY=$(echo "${MIRROR_COUNTRY:-all}" | tr '[:lower:]' '[:upper:]' | cut -c1-2); [[ -z "$MIRROR_COUNTRY" ]] && MIRROR_COUNTRY="all" ;;
+  *) MIRROR_COUNTRY=$(mirror_country_from_locale "$LOCALE"); [[ -z "$MIRROR_COUNTRY" ]] && MIRROR_COUNTRY="all" ;;
+esac
+
+# Firmware: Full / Auto-detect / None
+echo ""
+log_info "Firmware: 1) Full (linux-firmware, ~700MB)  2) Auto (detect from this machine)  3) None (e.g. VM)"
+log_ask "Choice (1-3, default 2): "
+read -r fw </dev/tty
+fw=${fw:-2}
+case "$fw" in
+  1) FIRMWARE_PACKAGES="linux-firmware" ;;
+  2) FIRMWARE_PACKAGES=$(detect_firmware_packages); [[ -z "$FIRMWARE_PACKAGES" ]] && { log_warn "No hardware detected, using full firmware"; FIRMWARE_PACKAGES="linux-firmware"; } ;;
+  3) FIRMWARE_PACKAGES="" ;;
+  *) FIRMWARE_PACKAGES=$(detect_firmware_packages); [[ -z "$FIRMWARE_PACKAGES" ]] && FIRMWARE_PACKAGES="linux-firmware"; ;;
+esac
 
 echo ""
 echo -e "  ${BOLD}Summary${NC}"
@@ -129,7 +201,10 @@ echo "  Disk:     ${DISK}"
 echo "  Hostname: ${HOSTNAME}"
 echo "  User:     ${USER}"
 echo "  Locale:   ${LOCALE}"
+echo "  Keymap:   ${KEYMAP}"
 echo "  Timezone: ${TIMEZONE}"
+echo "  Mirror:   ${MIRROR_COUNTRY}"
+echo "  Firmware: ${FIRMWARE_PACKAGES:-none}"
 echo ""
 log_ask "Proceed? (yes/no): "
 read -r confirm </dev/tty
@@ -142,6 +217,11 @@ if ! ping -c 1 -W 3 8.8.8.8 &>/dev/null && ! ping -c 1 -W 3 archlinux.org &>/dev
   exit 1
 fi
 log_ok "Network ok"
+
+if [[ -n "$MIRROR_COUNTRY" && "$MIRROR_COUNTRY" != "all" ]]; then
+  log_info "Updating mirrorlist for country: ${MIRROR_COUNTRY}"
+  curl -sL "https://archlinux.org/mirrorlist/?country=${MIRROR_COUNTRY}&protocol=https&use_mirror_status=on" | sed 's/^#Server/Server/' > /etc/pacman.d/mirrorlist
+fi
 
 pacman -Sy --noconfirm || true
 echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
@@ -170,19 +250,25 @@ mount "${ROOT_PART}" /mnt
 mkdir -p /mnt/boot
 mount "${BOOT_PART}" /mnt/boot
 
-log_info "Installing base system..."
-pacstrap /mnt base linux linux-firmware openssh sudo git zsh bash networkmanager curl grub efibootmgr
+log_info "Installing base system (minimal: base, linux, sudo, networkmanager, curl, grub)..."
+BASE_PKGS="base linux sudo networkmanager curl grub efibootmgr"
+[[ -n "$FIRMWARE_PACKAGES" ]] && BASE_PKGS="${BASE_PKGS} ${FIRMWARE_PACKAGES}"
+pacstrap /mnt $BASE_PKGS
+[[ -n "$MIRROR_COUNTRY" && "$MIRROR_COUNTRY" != "all" ]] && cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
 pacman -Scc --noconfirm 2>/dev/null || true
 
 genfstab -U /mnt > /mnt/etc/fstab
+
+# Escape locale for sed (computed in host shell so heredoc expansion has it)
+_LOCALE_ESC="${LOCALE//./\\.}"
 
 log_info "Configuring system..."
 arch-chroot /mnt /bin/bash <<EOF
 set -e
 ln -sf /usr/share/zoneinfo/${TIMEZONE} /etc/localtime
 hwclock --systohc
-sed -i '/^#${LOCALE}/s/^#//' /etc/locale.gen
-sed -i '/^#en_US.UTF-8/s/^#//' /etc/locale.gen
+# Enable only the selected locale (no extra en_US unless that is the chosen one)
+sed -i "/^#${_LOCALE_ESC}/s/^#//" /etc/locale.gen
 locale-gen
 echo "LANG=${LOCALE}" > /etc/locale.conf
 echo "LC_COLLATE=C" >> /etc/locale.conf
@@ -191,16 +277,16 @@ echo "${HOSTNAME}" > /etc/hostname
 printf '127.0.0.1   localhost\n::1         localhost\n127.0.1.1   %s.localdomain %s\n' "${HOSTNAME}" "${HOSTNAME}" > /etc/hosts
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
 grub-mkconfig -o /boot/grub/grub.cfg
-systemctl enable NetworkManager.service sshd.service
-useradd -m -G wheel -s /bin/zsh "${USER}"
+systemctl enable NetworkManager.service
+useradd -m -G wheel -s /bin/bash "${USER}"
 echo "${USER}:${PASSWORD}" | chpasswd
 echo "${USER} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/${USER}
 chmod 0440 /etc/sudoers.d/${USER}
 mkdir -p /home/${USER}/.ssh
 chmod 700 /home/${USER}/.ssh
 chown -R ${USER}:${USER} /home/${USER}
-printf '\n# minidite / Cursor\nClientAliveInterval 60\nClientAliveCountMax 3\nTCPKeepAlive yes\nCompression yes\n' >> /etc/ssh/sshd_config
-chsh -s /bin/zsh root 2>/dev/null || true
+chsh -s /bin/bash root 2>/dev/null || true
+pacman -Scc --noconfirm 2>/dev/null || true
 EOF
 
 mkdir -p /mnt/home/${USER}/.config /mnt/home/${USER}/.local/bin /mnt/home/${USER}/.cache
@@ -218,5 +304,5 @@ echo "  Next:"
 echo "    1. reboot"
 echo "    2. Log in as ${USER}"
 echo "    3. Run:  curl -fsSL https://pages.acridite.cc/minidite/setup | bash"
-echo "    4. Add your SSH key to ~/.ssh/authorized_keys if needed"
+echo "    4. In setup you can install OpenSSH and configure SSH keys"
 echo ""
