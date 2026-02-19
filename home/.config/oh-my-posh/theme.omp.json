@@ -6,7 +6,7 @@
       "type": "prompt",
       "segments": [
         {
-          "background": "#216B5A",
+          "background": "#0A4632",
           "foreground": "#ffffff",
           "leading_diamond": "<transparent,background>\uE0B0</>",
           "trailing_diamond": "\uE0B0",

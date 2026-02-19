@@ -189,6 +189,45 @@ gu-get() { echo "Name: $(git config user.name)" "Email: $(git config user.email)
 profile-edit() { "${EDITOR}" "${HOME}/.bashrc"; }
 theme-edit() { "${EDITOR}" "${HOME}/.config/oh-my-posh/theme.omp.json"; }
 reload() { source "${HOME}/.bashrc"; }
+snap() {
+  sudo snapper -c root create --description "${1:-manual $(date +%Y-%m-%d_%H:%M)}" || return 1
+  echo "Snapshot created."
+  [[ -x /usr/local/bin/limine-snapper-menu.sh ]] && sudo /usr/local/bin/limine-snapper-menu.sh && echo "Limine boot menu updated."
+}
+snap-ls() { sudo snapper -c root list; }
+snap-diff() {
+  [[ -z "$1" ]] && { echo "Usage: snap-diff <num>  (diff between snapshot and current)"; return 1; }
+  sudo snapper -c root status "$1"..0
+}
+snap-rm() {
+  [[ -z "$1" ]] && { echo "Usage: snap-rm <num>"; return 1; }
+  sudo snapper -c root delete "$1" && echo "Snapshot $1 deleted."
+  [[ -x /usr/local/bin/limine-snapper-menu.sh ]] && sudo /usr/local/bin/limine-snapper-menu.sh
+}
+snap-rollback() {
+  [[ -z "$1" ]] && { echo "Usage: snap-rollback <num>  (rollback root to snapshot)"; return 1; }
+  local num="$1"
+  local snap_path="/.snapshots/${num}/snapshot"
+  [[ -d "$snap_path" ]] || { echo "Snapshot $num not found at $snap_path"; return 1; }
+  echo "This will:"
+  echo "  1. Snapshot current root as backup"
+  echo "  2. Replace @ with snapshot #${num}"
+  echo "  3. Reboot required after"
+  read -rp "Continue? (yes/no): " confirm
+  [[ "$confirm" == "yes" ]] || { echo "Aborted."; return 0; }
+  local root_dev
+  root_dev=$(findmnt -n -o SOURCE /)
+  local mnt="/tmp/.snap-rollback-$$"
+  sudo mkdir -p "$mnt"
+  sudo mount -o subvolid=5 "$root_dev" "$mnt" || { echo "Failed to mount toplevel"; return 1; }
+  sudo snapper -c root create --description "pre-rollback-$(date +%Y%m%d_%H%M)" 2>/dev/null || true
+  local ts; ts=$(date +%Y%m%d_%H%M%S)
+  sudo mv "$mnt/@" "$mnt/@.rollback-${ts}" || { sudo umount "$mnt"; echo "Failed to rename @"; return 1; }
+  sudo btrfs subvolume snapshot "$mnt/@snapshots/${num}/snapshot" "$mnt/@" || { sudo mv "$mnt/@.rollback-${ts}" "$mnt/@"; sudo umount "$mnt"; echo "Failed to create snapshot"; return 1; }
+  sudo umount "$mnt"
+  echo "Rollback done. Old root saved as @.rollback-${ts}"
+  echo "Reboot now:  sudo reboot"
+}
 
 # -----------------------------------------------------------------------------
 # Help: list all aliases and functions with descriptions
@@ -251,6 +290,13 @@ show-help() {
   echo -e "${BOLD}${BLUE}Lazydocker (Docker/Podman)${NC}"
   echo -e "  ${YELLOW}ld-podman${NC}  set DOCKER_HOST to Podman socket"
   echo -e "  ${YELLOW}ld-reset${NC}   unset DOCKER_HOST (use Docker)"
+  echo ""
+  echo -e "${BOLD}${BLUE}Snapshot (Snapper)${NC}"
+  echo -e "  ${YELLOW}snap [desc]${NC}       create manual snapshot (optional description)"
+  echo -e "  ${YELLOW}snap-ls${NC}           list all snapshots"
+  echo -e "  ${YELLOW}snap-diff <num>${NC}   show changes between snapshot and current"
+  echo -e "  ${YELLOW}snap-rm <num>${NC}     delete a snapshot"
+  echo -e "  ${YELLOW}snap-rollback <num>${NC} rollback root to snapshot (requires reboot)"
   echo ""
   echo -e "${BOLD}${BLUE}Config and misc${NC}"
   echo -e "  ${YELLOW}sysinfo${NC}      system info (fastfetch)"

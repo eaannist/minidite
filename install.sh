@@ -43,6 +43,7 @@ log_ok()    { echo -e "${GREEN}[ok]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 log_err()   { echo -e "${RED}[x]${NC} $1"; }
 log_ask()   { echo -e "${BLUE}[?]${NC} $1"; }
+die()       { log_err "$1"; exit 1; }
 
 read_choice() {
   local prompt="$1"
@@ -125,7 +126,7 @@ echo ""
 log_info "Step 1/6: Select target disk (all data will be erased)"
 echo ""
 mapfile -t _disk_list < <(list_disks_raw)
-[[ ${#_disk_list[@]} -eq 0 ]] && { log_err "No disks found"; exit 1; }
+[[ ${#_disk_list[@]} -eq 0 ]] && die "No disks found"
 for i in "${!_disk_list[@]}"; do
   printf "  %d) /dev/%s (%s)\n" $((i+1)) "${_disk_list[i]%% *}" "${_disk_list[i]#* }"
 done
@@ -237,112 +238,247 @@ echo -e "  ${BOLD}Mirror:${NC}   ${MIRROR_COUNTRY}"
 echo -e "  ${BOLD}Firmware:${NC} ${FIRMWARE_PACKAGES:-none}"
 echo ""
 confirm=$(read_yes_no "Proceed with install? (yes/no): ")
-[[ "$confirm" == "yes" ]] || { log_err "Aborted"; exit 1; }
+[[ "$confirm" == "yes" ]] || die "Aborted by user"
+
+# -----------------------------------------------------------------------------
+# Step runner: run a step and die on failure (optional validation)
+# -----------------------------------------------------------------------------
+run_step() {
+  local name="$1"
+  local cmd="$2"
+  log_info "Step: ${name}..."
+  if eval "$cmd"; then
+    log_ok "${name} done"
+    return 0
+  fi
+  die "${name} failed"
+}
 
 # =============================================================================
-# Execution (network, partition, install, configure)
+# Execution: incremental steps with validation
 # =============================================================================
 
-log_info "Checking network..."
-if ! ping -c 1 -W 3 8.8.8.8 &>/dev/null && ! ping -c 1 -W 3 archlinux.org &>/dev/null; then
-  log_err "No internet. Configure network first."
-  exit 1
-fi
-log_ok "Network ok"
+# --- Step 1: Network ---
+run_step "Network check" 'ping -c 1 -W 3 8.8.8.8 &>/dev/null || ping -c 1 -W 3 archlinux.org &>/dev/null'
 echo ""
 
-if [[ -n "$MIRROR_COUNTRY" && "$MIRROR_COUNTRY" != "all" ]]; then
-  log_info "Updating mirrorlist (${MIRROR_COUNTRY})..."
-  curl -sL "https://archlinux.org/mirrorlist/?country=${MIRROR_COUNTRY}&protocol=https&use_mirror_status=on" | sed 's/^#Server/Server/' > /etc/pacman.d/mirrorlist
-fi
-pacman -Sy --noconfirm || true
-echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
-loadkeys "${KEYMAP}" 2>/dev/null || true
+# --- Step 2: Host prep ---
+run_step "Host prep (mirrorlist, keymap)" '
+  ( [[ -z "$MIRROR_COUNTRY" || "$MIRROR_COUNTRY" == "all" ]] ) || \
+    { curl -sL "https://archlinux.org/mirrorlist/?country=${MIRROR_COUNTRY}&protocol=https&use_mirror_status=on" | sed "s/^#Server/Server/" > /etc/pacman.d/mirrorlist || true; }
+  pacman -Sy --noconfirm 2>/dev/null || true
+  echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
+  loadkeys "${KEYMAP}" 2>/dev/null || true
+  true
+'
+echo ""
 
-log_info "Partitioning ${DISK} (GPT, EFI 256MiB + root)..."
-parted -s "${DISK}" mklabel gpt
-parted -s "${DISK}" mkpart primary fat32 1MiB 256MiB
-parted -s "${DISK}" mkpart primary btrfs 256MiB 100%
-parted -s "${DISK}" set 1 esp on
+# --- Step 3: Partition and format ---
+run_step "Partition (GPT, EFI 512MiB + Btrfs)" '
+  parted -s "${DISK}" mklabel gpt && \
+  parted -s "${DISK}" mkpart primary fat32 1MiB 512MiB && \
+  parted -s "${DISK}" mkpart primary btrfs 512MiB 100% && \
+  parted -s "${DISK}" set 1 esp on
+'
+if [[ "${DISK}" =~ nvme ]]; then BOOT_PART="${DISK}p1"; ROOT_PART="${DISK}p2"; else BOOT_PART="${DISK}1"; ROOT_PART="${DISK}2"; fi
 
-if [[ "${DISK}" =~ nvme ]]; then
-  BOOT_PART="${DISK}p1"
-  ROOT_PART="${DISK}p2"
-else
-  BOOT_PART="${DISK}1"
-  ROOT_PART="${DISK}2"
-fi
+run_step "Format (FAT32 + Btrfs)" 'mkfs.fat -F32 "${BOOT_PART}" && mkfs.btrfs -f -L root "${ROOT_PART}"'
+echo ""
 
-log_info "Formatting (FAT32 + Btrfs)..."
-mkfs.fat -F32 "${BOOT_PART}"
-mkfs.btrfs -f -L root "${ROOT_PART}"
+# --- Step 4: Btrfs subvolumes and mount ---
+run_step "Btrfs subvolumes (@, @snapshots)" '
+  mount "${ROOT_PART}" /mnt && \
+  btrfs subvolume create /mnt/@ && \
+  btrfs subvolume create /mnt/@snapshots && \
+  umount /mnt
+'
+BTRFS_OPTS="compress=zstd:1,space_cache=v2,noatime,discard=async,ssd,commit=120"
+run_step "Mount root and ESP" '
+  mount -o "subvol=@,${BTRFS_OPTS}" "${ROOT_PART}" /mnt && \
+  mkdir -p /mnt/.snapshots /mnt/boot && \
+  mount -o "subvol=@snapshots,${BTRFS_OPTS}" "${ROOT_PART}" /mnt/.snapshots && \
+  mount "${BOOT_PART}" /mnt/boot
+'
+ROOT_UUID=$(blkid -s UUID -o value "${ROOT_PART}")
+BOOT_UUID=$(blkid -s UUID -o value "${BOOT_PART}")
+[[ -n "$ROOT_UUID" && -n "$BOOT_UUID" ]] || die "Could not get UUIDs for root or boot partition"
+echo ""
 
-log_info "Creating Btrfs subvolumes (@, @home)..."
-mount "${ROOT_PART}" /mnt
-btrfs subvolume create /mnt/@
-btrfs subvolume create /mnt/@home
-umount /mnt
-
-# Mount options: zstd:3 (balance compression/speed), noatime (fewer writes), discard=async (SSD TRIM), ssd, commit=120 (stability)
-BTRFS_OPTS="compress=zstd:3,noatime,discard=async,ssd,commit=120"
-log_info "Mounting root (@) and @home..."
-mount -o "subvol=@,${BTRFS_OPTS}" "${ROOT_PART}" /mnt
-mkdir -p /mnt/home
-mount -o "subvol=@home,${BTRFS_OPTS}" "${ROOT_PART}" /mnt/home
-mkdir -p /mnt/boot
-mount "${BOOT_PART}" /mnt/boot
-
-BASE_PKGS="base linux sudo networkmanager curl grub efibootmgr btrfs-progs"
+# --- Step 5: Pacstrap ---
+run_step "vconsole.conf (pre-pacstrap)" '
+  mkdir -p /mnt/etc && echo "KEYMAP=${KEYMAP}" > /mnt/etc/vconsole.conf && chmod 644 /mnt/etc/vconsole.conf
+'
+BASE_PKGS="base linux sudo networkmanager curl limine snapper btrfs-progs efibootmgr"
 [[ -n "$FIRMWARE_PACKAGES" ]] && BASE_PKGS="${BASE_PKGS} ${FIRMWARE_PACKAGES}"
-# Do not use -c: on live ISO the host root (/) has very little space; use target cache (/mnt/var/cache) so downloads go to the target disk. Cache is cleared in chroot below.
-pacstrap /mnt $BASE_PKGS
+run_step "Pacstrap base system" "pacstrap /mnt $BASE_PKGS"
 [[ -n "$MIRROR_COUNTRY" && "$MIRROR_COUNTRY" != "all" ]] && cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
 pacman -Scc --noconfirm 2>/dev/null || true
+echo ""
 
-genfstab -U /mnt > /mnt/etc/fstab
-
+# --- Step 6: fstab (deterministic; tabs between fields) ---
+run_step "fstab" '
+  {
+    echo "# Root (Btrfs subvol=@)"
+    echo -e "UUID=${ROOT_UUID}\t/\tbtrfs\tsubvol=@,${BTRFS_OPTS}\t0\t0"
+    echo "# Snapshots"
+    echo -e "UUID=${ROOT_UUID}\t/.snapshots\tbtrfs\tsubvol=@snapshots,${BTRFS_OPTS}\t0\t0"
+    echo "# ESP at /boot"
+    echo -e "UUID=${BOOT_UUID}\t/boot\tvfat\tumask=0077\t0\t2"
+  } > /mnt/etc/fstab
+  grep -q "subvol=@" /mnt/etc/fstab || die "fstab missing subvol=@"
+'
+ESP_PART_NUM=1
 _LOCALE_ESC="${LOCALE//./\\.}"
-log_info "Configuring system (chroot)..."
-arch-chroot /mnt /bin/bash <<EOF
+echo ""
+
+# --- Step 7: Passwords in temp files (no escaping issues in heredoc) ---
+PASSFILE_ROOT="/mnt/tmp/.root_pass"
+PASSFILE_USER="/mnt/tmp/.user_pass"
+mkdir -p /mnt/tmp
+echo -n "$PASSWORD" > "$PASSFILE_ROOT"
+echo -n "$PASSWORD" > "$PASSFILE_USER"
+chmod 600 "$PASSFILE_ROOT" "$PASSFILE_USER"
+log_ok "Password files prepared (will be removed in chroot)"
+echo ""
+
+# --- Step 8: Chroot configuration ---
+log_info "Step: Chroot configuration..."
+( arch-chroot /mnt /bin/bash <<CHROOT_EOF
 set -e
+fail() { echo "ERROR: \$1" >&2; exit 1; }
+
+# --- 8a: Root password first (required for emergency mode; use chpasswd from file) ---
+if [[ -f /tmp/.root_pass ]]; then
+  RP=\$(cat /tmp/.root_pass)
+  echo "root:\$RP" | chpasswd || fail "chpasswd root failed"
+  passwd -u root 2>/dev/null || true
+  rm -f /tmp/.root_pass
+fi
+grep -q "subvol=@" /etc/fstab || fail "fstab missing subvol=@"
+
+# --- 8b: Base system config ---
+[[ -f /etc/vconsole.conf ]] || { echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf; }
 ln -sf /usr/share/zoneinfo/${TIMEZONE} /etc/localtime
 hwclock --systohc
 sed -i "/^#${_LOCALE_ESC}/s/^#//" /etc/locale.gen
-locale-gen
+locale-gen || fail "locale-gen"
 echo "LANG=${LOCALE}" > /etc/locale.conf
 echo "LC_COLLATE=C" >> /etc/locale.conf
-echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
 echo "${HOSTNAME}" > /etc/hostname
 printf '127.0.0.1   localhost\n::1         localhost\n127.0.1.1   %s.localdomain %s\n' "${HOSTNAME}" "${HOSTNAME}" > /etc/hosts
 mkdir -p /etc/systemd/journald.conf.d
 echo -e "[Journal]\nSystemMaxUse=50M" > /etc/systemd/journald.conf.d/00-size.conf
-grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
-grub-mkconfig -o /boot/grub/grub.cfg
-# Explicit btrfs module and fsck helper (btrfs-progs): avoid mkinitcpio build errors and "No fsck helpers found"
-sed -i 's/^MODULES=()/MODULES=(btrfs)/' /etc/mkinitcpio.conf
+
+# --- 8c: Limine (based on omarchy reference implementation) ---
+# Copy EFI binary to arch-limine folder
+mkdir -p /boot/EFI/arch-limine
+cp /usr/share/limine/BOOTX64.EFI /boot/EFI/arch-limine/ || fail "Copy Limine EFI"
+# Config file MUST be limine.conf (NOT .cfg) placed NEXT TO the EFI binary
+# Limine searches: <EFI app dir>/limine.conf, then /boot/limine.conf, etc.
+cat > /boot/EFI/arch-limine/limine.conf <<LIMINE
+timeout: 5
+
+/Arch Linux
+    protocol: linux
+    path: boot():/vmlinuz-linux
+    cmdline: root=UUID=${ROOT_UUID} rootfstype=btrfs rootflags=subvol=@ rw
+    module_path: boot():/initramfs-linux.img
+LIMINE
+# Also place a copy at /boot/limine.conf as fallback (standard search path)
+cp /boot/EFI/arch-limine/limine.conf /boot/limine.conf
+efibootmgr --create --disk ${DISK} --part ${ESP_PART_NUM} --label "Arch Linux" --loader /EFI/arch-limine/BOOTX64.EFI --unicode || fail "efibootmgr failed"
+
+# --- 8d: mkinitcpio ---
+# Arch ships systemd-based HOOKS by default since mkinitcpio v40 (PKGBUILD -Dsystemd_hooks=true).
+# Switch to udev-based HOOKS (busybox init) for reliability with Btrfs+Limine (same as Omarchy).
+sed -i 's/^MODULES=(.*)/MODULES=(btrfs)/' /etc/mkinitcpio.conf
+sed -i 's/^HOOKS=(.*)/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block filesystems fsck)/' /etc/mkinitcpio.conf
+grep -q "^MODULES=(btrfs)" /etc/mkinitcpio.conf || fail "mkinitcpio.conf: MODULES not set"
+grep -q "^HOOKS=.*udev" /etc/mkinitcpio.conf || fail "mkinitcpio.conf: HOOKS not set to udev"
+echo "--- mkinitcpio.conf (MODULES + HOOKS) ---"
+grep -E "^(MODULES|HOOKS)=" /etc/mkinitcpio.conf
+echo "---"
 mkinitcpio -P
-systemctl enable NetworkManager.service
-useradd -m -G wheel -s /bin/bash "${USER}"
-echo "${USER}:${PASSWORD}" | chpasswd
+[[ -f /boot/initramfs-linux.img ]] || fail "mkinitcpio: no initramfs found"
+[[ -f /boot/vmlinuz-linux ]] || fail "mkinitcpio: no kernel found at /boot/vmlinuz-linux"
+[[ -f /etc/os-release ]] || fail "/etc/os-release missing"
+[[ -L /sbin/init || -f /sbin/init ]] || fail "/sbin/init missing (systemd not installed?)"
+
+# --- 8e: User and sudo ---
+useradd -m -G wheel -s /bin/bash "${USER}" || fail "useradd failed"
+if [[ -f /tmp/.user_pass ]]; then
+  UP=\$(cat /tmp/.user_pass)
+  echo "${USER}:\$UP" | chpasswd || fail "chpasswd user failed"
+  rm -f /tmp/.user_pass
+fi
 echo "${USER} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/${USER}
 chmod 0440 /etc/sudoers.d/${USER}
 mkdir -p /home/${USER}/.ssh
 chmod 700 /home/${USER}/.ssh
 chown -R ${USER}:${USER} /home/${USER}
-chsh -s /bin/bash root 2>/dev/null || true
-pacman -Scc --noconfirm 2>/dev/null || true
-EOF
 
-log_info "Creating user directories and setting ownership..."
-mkdir -p /mnt/home/${USER}/.config /mnt/home/${USER}/.local/bin /mnt/home/${USER}/.cache
-uid=$(grep "^${USER}:" /mnt/etc/passwd | cut -d: -f3)
-gid=$(grep "^${USER}:" /mnt/etc/passwd | cut -d: -f4)
-[[ -n "$uid" && -n "$gid" ]] && chown -R "${uid}:${gid}" /mnt/home/${USER}
-
-log_info "Unmounting..."
-umount -R /mnt
-
+CHROOT_EOF
+) || die "Chroot configuration failed. Check the last ERROR line above."
+log_ok "Chroot configuration done"
 echo ""
+
+# --- Step 9: Post-chroot (enable services, fix root shell) ---
+run_step "Post-chroot (NetworkManager, root shell)" '
+  systemctl --root=/mnt enable NetworkManager.service 2>/dev/null || true
+  sed -i "s|^\(root:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:\).*|\1/bin/bash|" /mnt/etc/passwd
+'
+# Set root and user passwords from HOST (chpasswd -R or chroot chpasswd from file)
+run_step "Set root and user passwords (from host)" '
+  if echo "root:${PASSWORD}" | chpasswd -R /mnt 2>/dev/null; then
+    echo "${USER}:${PASSWORD}" | chpasswd -R /mnt 2>/dev/null || true
+  else
+    echo "root:${PASSWORD}" > /mnt/tmp/.chp && arch-chroot /mnt chpasswd < /mnt/tmp/.chp && rm -f /mnt/tmp/.chp
+    echo "${USER}:${PASSWORD}" > /mnt/tmp/.chp && arch-chroot /mnt chpasswd < /mnt/tmp/.chp && rm -f /mnt/tmp/.chp
+  fi
+  arch-chroot /mnt passwd -u root 2>/dev/null || true
+'
+rm -f /mnt/tmp/.root_pass /mnt/tmp/.user_pass 2>/dev/null || true
+echo ""
+
+# --- Step 10: User dirs ---
+run_step "User dirs" '
+  mkdir -p /mnt/home/${USER}/.config /mnt/home/${USER}/.local/bin /mnt/home/${USER}/.cache
+  uid=$(grep "^${USER}:" /mnt/etc/passwd | cut -d: -f3)
+  gid=$(grep "^${USER}:" /mnt/etc/passwd | cut -d: -f4)
+  [[ -n "$uid" && -n "$gid" ]] && chown -R "${uid}:${gid}" /mnt/home/${USER} || true
+'
+
+# --- Step 11: Pre-unmount verification (debug output) ---
+log_info "Pre-unmount verification..."
+echo "--- /mnt/etc/fstab ---"
+cat /mnt/etc/fstab
+echo "--- /mnt/boot/EFI/arch-limine/limine.conf ---"
+cat /mnt/boot/EFI/arch-limine/limine.conf 2>/dev/null || echo "(not found)"
+echo "--- /mnt/boot/limine.conf ---"
+cat /mnt/boot/limine.conf 2>/dev/null || echo "(not found)"
+echo "--- mkinitcpio.conf (MODULES + HOOKS) ---"
+grep -E "^(MODULES|HOOKS)=" /mnt/etc/mkinitcpio.conf
+echo "--- /sbin/init target ---"
+ls -la /mnt/sbin/init 2>/dev/null || echo "/sbin/init NOT FOUND"
+echo "--- /etc/os-release ---"
+head -3 /mnt/etc/os-release 2>/dev/null || echo "(not found)"
+echo "--- root entry in /etc/passwd ---"
+grep "^root:" /mnt/etc/passwd
+echo "--- root entry in /etc/shadow (lock status) ---"
+cut -d: -f1,2 /mnt/etc/shadow | grep "^root:" | sed 's/:.*/:***/' 
+root_hash=$(awk -F: '/^root:/ {print $2}' /mnt/etc/shadow)
+if [[ "$root_hash" == "!" || "$root_hash" == "!!" || "$root_hash" == "*" ]]; then
+  log_warn "root account appears LOCKED (hash='${root_hash}')"
+else
+  log_ok "root account appears UNLOCKED"
+fi
+echo "--- Boot files on ESP ---"
+ls -la /mnt/boot/vmlinuz-linux /mnt/boot/initramfs-linux.img 2>/dev/null
+echo "---"
+
+run_step "Unmount" 'umount -R /mnt'
+echo ""
+
 log_ok "Install complete."
 echo ""
 echo "  Next:"

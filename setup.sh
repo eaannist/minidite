@@ -146,45 +146,204 @@ podman_post_install() {
 }
 
 # =============================================================================
-# Main: numbered steps
+# Phase 1: Collect state and all user decisions
 # =============================================================================
 clear
 show_logo
 echo -e "  ${BOLD}minidite${NC}  ${DIM}-- setup packages and configs${NC}"
+echo -e "  ${DIM}First you choose; then all actions run.${NC}"
+echo ""
+
+# Precompute state (no prompts)
+installed_pkgs=()
+missing_pkgs=()
+for p in "${RECOMMENDED_PACKAGES[@]}"; do
+  pacman -Q "$p" &>/dev/null && installed_pkgs+=("$p") || missing_pkgs+=("$p")
+done
+installed_count=${#installed_pkgs[@]}
+missing_count=${#missing_pkgs[@]}
+total=${#RECOMMENDED_PACKAGES[@]}
+config_already=0
+[[ -f "$HOME/.bashrc" ]] && grep -q 'minidite' "$HOME/.bashrc" 2>/dev/null && config_already=1
+openssh_installed=0
+pacman -Q openssh &>/dev/null && openssh_installed=1
+has_key=0
+has_auth=0
+[[ -f "$HOME/.ssh/id_ed25519" || -f "$HOME/.ssh/id_rsa" ]] && has_key=1
+[[ -f "$HOME/.ssh/authorized_keys" && -s "$HOME/.ssh/authorized_keys" ]] && has_auth=1
+docker_installed=0
+pacman -Q docker &>/dev/null && docker_installed=1
+podman_installed=0
+pacman -Q podman &>/dev/null && podman_installed=1
+omp_installed=0
+command -v oh-my-posh &>/dev/null && omp_installed=1
+
+# ---- Decisions: packages ----
+log_info "Packages (${installed_count}/${total} installed, ${missing_count} missing)"
+[[ $missing_count -gt 0 ]] && echo -e "  ${DIM}Missing: ${missing_pkgs[*]}${NC}"
+if [[ $installed_count -eq 0 ]]; then
+  echo "  1) Install missing  4) Skip"
+  CHOICE_PKGS=$(read_choice "Choice (1 or 4): " "1" "4")
+elif [[ $missing_count -gt 0 ]]; then
+  echo "  1) Install missing  2) Update installed  3) Update installed and install missing  4) Skip"
+  CHOICE_PKGS=$(read_choice "Choice (1-4): " "1" "2" "3" "4")
+else
+  echo "  1) Update installed  2) Skip"
+  c=$(read_choice "Choice (1-2): " "1" "2")
+  [[ "$c" == "1" ]] && CHOICE_PKGS="2" || CHOICE_PKGS="4"
+fi
+echo ""
+
+# ---- Decisions: config ----
+log_info "Config files from repo"
+if [[ $config_already -eq 1 ]]; then
+  CONFIG_DO=$(read_yes_no "Configs already present. Overwrite? (yes/no): ")
+else
+  CONFIG_DO=$(read_yes_no "Download and install config files? (yes/no): ")
+fi
+echo ""
+
+# ---- Decisions: Oh My Posh ----
+log_info "Oh My Posh (prompt theme)"
+if [[ $omp_installed -eq 1 ]]; then
+  echo "  1) Update  2) Skip"
+  c=$(read_choice "Choice (1-2): " "1" "2")
+  [[ "$c" == "1" ]] && INST_OMP="yes" || INST_OMP="no"
+else
+  echo "  1) Install  2) Skip"
+  c=$(read_choice "Choice (1-2): " "1" "2")
+  [[ "$c" == "1" ]] && INST_OMP="yes" || INST_OMP="no"
+fi
+echo ""
+
+# ---- Decisions: OpenSSH ----
+log_info "OpenSSH server"
+if [[ $openssh_installed -eq 1 ]]; then
+  echo "  1) Update and ensure configured  2) Skip"
+  CHOICE_OPENSSH=$(read_choice "Choice (1-2): " "1" "2")
+else
+  echo "  1) Install  2) Skip"
+  CHOICE_OPENSSH=$(read_choice "Choice (1-2): " "1" "2")
+fi
+echo ""
+
+# ---- Decisions: SSH keys ----
+log_info "SSH keys"
+if [[ $has_key -eq 1 && $has_auth -eq 1 ]]; then
+  GEN_SSH_KEY="no"
+  ADD_SSH_KEY="no"
+  log_ok "Already configured"
+else
+  if [[ $has_key -eq 0 ]]; then
+    GEN_SSH_KEY=$(read_yes_no "Generate SSH key pair? (yes/no): ")
+    ADD_SSH_KEY="no"
+  else
+    GEN_SSH_KEY="no"
+    [[ $has_auth -eq 0 ]] && ADD_SSH_KEY=$(read_yes_no "Add existing public key to authorized_keys? (yes/no): ") || ADD_SSH_KEY="no"
+  fi
+fi
+echo ""
+
+# ---- Decisions: Docker ----
+log_info "Docker"
+if [[ $docker_installed -eq 1 ]]; then
+  echo "  1) Update  2) Skip"
+  CHOICE_DOCKER=$(read_choice "Choice (1-2): " "1" "2")
+else
+  echo "  1) Install  2) Skip"
+  CHOICE_DOCKER=$(read_choice "Choice (1-2): " "1" "2")
+fi
+echo ""
+
+# ---- Decisions: Podman ----
+log_info "Podman"
+if [[ $podman_installed -eq 1 ]]; then
+  echo "  1) Update  2) Skip"
+  CHOICE_PODMAN=$(read_choice "Choice (1-2): " "1" "2")
+else
+  echo "  1) Install  2) Skip"
+  CHOICE_PODMAN=$(read_choice "Choice (1-2): " "1" "2")
+fi
+echo ""
+
+# ---- Decisions: Lazydocker (only if Docker or Podman will be present) ----
+will_have_container=0
+[[ $docker_installed -eq 1 || "$CHOICE_DOCKER" == "1" ]] && will_have_container=1
+[[ $podman_installed -eq 1 || "$CHOICE_PODMAN" == "1" ]] && will_have_container=1
+lazydocker_installed=0
+command -v lazydocker &>/dev/null && lazydocker_installed=1
+[[ -x "$HOME/.local/bin/lazydocker" ]] && lazydocker_installed=1
+log_info "Lazydocker (TUI for Docker/Podman)"
+if [[ $will_have_container -eq 1 ]]; then
+  if [[ $lazydocker_installed -eq 1 ]]; then
+    echo "  1) Update  2) Skip"
+  else
+    echo "  1) Install  2) Skip"
+  fi
+  c=$(read_choice "Choice (1-2): " "1" "2")
+  [[ "$c" == "1" ]] && INST_LAZYDOCKER="yes" || INST_LAZYDOCKER="no"
+else
+  INST_LAZYDOCKER="no"
+  log_info "Skipped (no Docker/Podman)"
+fi
+echo ""
+
+# ---- Decisions: Snapper and Limine snapshot menu ----
+has_snapper=0
+command -v snapper &>/dev/null && has_snapper=1
+has_snapshots_mount=0
+[[ -d /.snapshots ]] && has_snapshots_mount=1
+snapper_configured=0
+snapper list-configs 2>/dev/null | grep -q "root" && snapper_configured=1
+
+log_info "Snapper (Btrfs snapshots)"
+if [[ $has_snapper -eq 1 && $has_snapshots_mount -eq 1 ]]; then
+  if [[ $snapper_configured -eq 1 ]]; then
+    CONF_SNAPPER="no"
+    log_ok "Already configured"
+  else
+    CONF_SNAPPER=$(read_yes_no "Configure Snapper for root snapshots? (yes/no): ")
+  fi
+else
+  CONF_SNAPPER="no"
+  [[ $has_snapper -eq 0 ]] && log_info "Skipped (snapper not installed)"
+  [[ $has_snapshots_mount -eq 0 ]] && log_info "Skipped (no /.snapshots)"
+fi
+echo ""
+
+log_info "Limine snapshot menu (boot menu with snapshots)"
+if [[ $has_snapper -eq 1 && $has_snapshots_mount -eq 1 ]]; then
+  echo "  1) Install/configure  2) Skip"
+  c=$(read_choice "Choice (1-2): " "1" "2")
+  [[ "$c" == "1" ]] && INST_LIMINE_MENU="yes" || INST_LIMINE_MENU="no"
+else
+  INST_LIMINE_MENU="no"
+  log_info "Skipped (requires Snapper + /.snapshots)"
+fi
+echo ""
+
+# ---- Confirm then run ----
+proceed=$(read_yes_no "Apply all choices and run setup? (yes/no): ")
+[[ "$proceed" != "yes" ]] && { log_info "Aborted."; exit 0; }
+echo ""
+
+# =============================================================================
+# Phase 2: Execute all operations (no further prompts)
+# =============================================================================
+log_info "Phase 2: Executing..."
 echo ""
 
 # ---- Step 1: Directories ----
-log_info "Step 1/11: Directories"
+log_info "Step 1/13: Directories"
 for d in "${REQUIRED_DIRS[@]}"; do
   mkdir -p "$d" 2>/dev/null || { log_err "Cannot create $d"; exit 1; }
 done
 log_ok "Directories ready"
 echo ""
 
-# ---- Step 2: Recommended packages ----
-log_info "Step 2/11: Recommended CLI packages"
-installed_pkgs=()
-missing_pkgs=()
-for p in "${RECOMMENDED_PACKAGES[@]}"; do
-  pacman -Q "$p" &>/dev/null && installed_pkgs+=("$p") || missing_pkgs+=("$p")
-done
-total=${#RECOMMENDED_PACKAGES[@]}
-installed_count=${#installed_pkgs[@]}
-missing_count=${#missing_pkgs[@]}
-log_info "${installed_count}/${total} installed, ${missing_count} missing."
-[[ $missing_count -gt 0 ]] && echo -e "  ${DIM}Missing: ${missing_pkgs[*]}${NC}"
-echo ""
-
-if [[ $missing_count -gt 0 ]]; then
-  echo "  1) Install missing only  2) Update installed  3) Update and install missing  4) Skip"
-  choice_pkgs=$(read_choice "Choice (1-4): " "1" "2" "3" "4")
-else
-  echo "  1) Update installed  2) Skip"
-  choice_pkgs=$(read_choice "Choice (1-2): " "1" "2")
-  [[ "$choice_pkgs" == "1" ]] && choice_pkgs="2"
-  [[ "$choice_pkgs" == "2" ]] && choice_pkgs="4"
-fi
-case "$choice_pkgs" in
+# ---- Step 2: Packages ----
+log_info "Step 2/13: Recommended CLI packages"
+case "$CHOICE_PKGS" in
   1) [[ $missing_count -gt 0 ]] && sudo pacman -S --noconfirm --needed "${missing_pkgs[@]}" 2>/dev/null && log_ok "Missing installed" || log_warn "Failed or nothing to do" ;;
   2) [[ $installed_count -gt 0 ]] && sudo pacman -S -u --noconfirm "${installed_pkgs[@]}" 2>/dev/null && log_ok "Updated" || log_info "Nothing to update" ;;
   3)
@@ -196,29 +355,39 @@ case "$choice_pkgs" in
 esac
 echo ""
 
-# ---- Step 3: Config files ----
-log_info "Step 3/11: Config files from repo"
-config_already=$( [[ -f "$HOME/.bashrc" ]] && grep -q 'minidite' "$HOME/.bashrc" 2>/dev/null && echo 1 || echo 0 )
-if [[ "$config_already" -eq 1 ]]; then
-  overwrite=$(read_yes_no "Configs already present. Overwrite? (yes/no): ")
-  [[ "$overwrite" == "yes" ]] && download_configs || log_info "Skipped"
+# ---- Step 3: Config ----
+log_info "Step 3/13: Config files"
+if [[ "$CONFIG_DO" == "yes" ]]; then
+  download_configs || { [[ $config_already -eq 1 ]] || exit 1; }
 else
-  write_cfg=$(read_yes_no "Download and install config files? (yes/no): ")
-  [[ "$write_cfg" == "yes" ]] && { download_configs || exit 1; } || log_info "Skipped"
+  log_info "Skipped"
 fi
 echo ""
 
 # ---- Step 4: Oh My Posh ----
-log_info "Step 4/11: Oh My Posh (prompt theme)"
-if command -v oh-my-posh &>/dev/null; then
-  log_ok "Already installed"
+log_info "Step 4/13: Oh My Posh"
+if [[ "$INST_OMP" == "yes" ]]; then
+  if curl -s https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/.local/bin" 2>/dev/null; then
+    log_ok "Installed/updated"
+    mkdir -p "$CONFIG/oh-my-posh"
+    curl -fsSL "${REPO_URL}/home/.config/oh-my-posh/theme.omp.json" -o "$CONFIG/oh-my-posh/theme.omp.json" 2>/dev/null && log_ok "Theme copied" || true
+  else
+    log_warn "Install failed"
+  fi
 else
-  inst_omp=$(read_yes_no "Install Oh My Posh? (yes/no): ")
-  if [[ "$inst_omp" == "yes" ]]; then
-    if curl -s https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/.local/bin" 2>/dev/null; then
-      log_ok "Installed"
-      mkdir -p "$CONFIG/oh-my-posh"
-      curl -fsSL "${REPO_URL}/home/.config/oh-my-posh/theme.omp.json" -o "$CONFIG/oh-my-posh/theme.omp.json" 2>/dev/null && log_ok "Theme copied" || true
+  log_info "Skipped"
+fi
+echo ""
+
+# ---- Step 5: OpenSSH ----
+log_info "Step 5/13: OpenSSH server"
+if [[ $openssh_installed -eq 1 ]]; then
+  [[ "$CHOICE_OPENSSH" == "1" ]] && { sudo pacman -S -u --noconfirm openssh 2>/dev/null || true; configure_sshd_minidite; sudo systemctl enable --now sshd.service 2>/dev/null && log_ok "sshd enabled" || true; } || log_info "Skipped"
+else
+  if [[ "$CHOICE_OPENSSH" == "1" ]]; then
+    if sudo pacman -S --noconfirm --needed openssh 2>/dev/null; then
+      configure_sshd_minidite
+      sudo systemctl enable --now sshd.service 2>/dev/null && log_ok "OpenSSH installed and sshd enabled" || log_warn "sshd enable failed"
     else
       log_warn "Install failed"
     fi
@@ -228,68 +397,37 @@ else
 fi
 echo ""
 
-# ---- Step 5: OpenSSH server ----
-log_info "Step 5/11: OpenSSH server"
-openssh_installed=0
-pacman -Q openssh &>/dev/null && openssh_installed=1
-if [[ $openssh_installed -eq 1 ]]; then
-  echo "  1) Update and ensure configured  2) Skip"
-  c=$(read_choice "Choice (1-2): " "1" "2")
-  [[ "$c" == "1" ]] && { sudo pacman -S -u --noconfirm openssh 2>/dev/null || true; configure_sshd_minidite; sudo systemctl enable --now sshd.service 2>/dev/null && log_ok "sshd enabled" || true; }
-else
-  echo "  1) Install  2) Skip"
-  c=$(read_choice "Choice (1-2): " "1" "2")
-  if [[ "$c" == "1" ]]; then
-    if sudo pacman -S --noconfirm --needed openssh 2>/dev/null; then
-      configure_sshd_minidite
-      sudo systemctl enable --now sshd.service 2>/dev/null && log_ok "OpenSSH installed and sshd enabled" || log_warn "sshd enable failed"
-    else
-      log_warn "Install failed"
-    fi
-  fi
-fi
-echo ""
-
 # ---- Step 6: SSH keys ----
-log_info "Step 6/11: SSH keys"
-has_key=0
-has_auth=0
-[[ -f "$HOME/.ssh/id_ed25519" || -f "$HOME/.ssh/id_rsa" ]] && has_key=1
-[[ -f "$HOME/.ssh/authorized_keys" && -s "$HOME/.ssh/authorized_keys" ]] && has_auth=1
+log_info "Step 6/13: SSH keys"
 if [[ $has_key -eq 1 && $has_auth -eq 1 ]]; then
-  log_ok "SSH already configured"
+  log_ok "Already configured"
 else
   mkdir -p "$HOME/.ssh"
   chmod 700 "$HOME/.ssh"
-  if [[ $has_key -eq 0 ]]; then
-    gen=$(read_yes_no "Generate SSH key pair? (yes/no): ")
-    if [[ "$gen" == "yes" ]]; then
-      ssh-keygen -t ed25519 -f "$HOME/.ssh/id_ed25519" -N "" -C "minidite"
-      chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_ed25519.pub"
-      cat "$HOME/.ssh/id_ed25519.pub" >> "$HOME/.ssh/authorized_keys" 2>/dev/null
-      chmod 600 "$HOME/.ssh/authorized_keys" 2>/dev/null
-      log_ok "Key created and added to authorized_keys"
-      echo ""; echo -e "${BOLD}Public key:${NC}"; cat "$HOME/.ssh/id_ed25519.pub"; echo ""
+  if [[ "$GEN_SSH_KEY" == "yes" ]]; then
+    ssh-keygen -t ed25519 -f "$HOME/.ssh/id_ed25519" -N "" -C "minidite"
+    chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_ed25519.pub"
+    cat "$HOME/.ssh/id_ed25519.pub" >> "$HOME/.ssh/authorized_keys" 2>/dev/null
+    chmod 600 "$HOME/.ssh/authorized_keys" 2>/dev/null
+    log_ok "Key created and added to authorized_keys"
+    echo ""; echo -e "${BOLD}Public key:${NC}"; cat "$HOME/.ssh/id_ed25519.pub"; echo ""
+  elif [[ "$ADD_SSH_KEY" == "yes" ]]; then
+    pub=$(ls "$HOME/.ssh/"*.pub 2>/dev/null | head -1)
+    if [[ -n "$pub" ]]; then
+      cat "$pub" >> "$HOME/.ssh/authorized_keys"
+      chmod 600 "$HOME/.ssh/authorized_keys"
+      log_ok "Added to authorized_keys"
     fi
-  else
-    [[ $has_auth -eq 0 ]] && add=$(read_yes_no "Add existing public key to authorized_keys? (yes/no): ") && [[ "$add" == "yes" ]] && \
-      { pub=$(ls "$HOME/.ssh/"*.pub 2>/dev/null | head -1); [[ -n "$pub" ]] && cat "$pub" >> "$HOME/.ssh/authorized_keys" && chmod 600 "$HOME/.ssh/authorized_keys" && log_ok "Added to authorized_keys"; }
   fi
 fi
 echo ""
 
 # ---- Step 7: Docker ----
-log_info "Step 7/11: Docker"
-docker_installed=0
-pacman -Q docker &>/dev/null && docker_installed=1
+log_info "Step 7/13: Docker"
 if [[ $docker_installed -eq 1 ]]; then
-  echo "  1) Update  2) Skip"
-  c=$(read_choice "Choice (1-2): " "1" "2")
-  [[ "$c" == "1" ]] && { sudo pacman -S -u --noconfirm docker docker-compose 2>/dev/null || true; sudo systemctl enable --now docker.service 2>/dev/null; sudo usermod -aG docker "$(whoami)" 2>/dev/null; }
+  [[ "$CHOICE_DOCKER" == "1" ]] && { sudo pacman -S -u --noconfirm docker docker-compose 2>/dev/null || true; sudo systemctl enable --now docker.service 2>/dev/null; sudo usermod -aG docker "$(whoami)" 2>/dev/null; log_ok "Updated"; } || log_info "Skipped"
 else
-  echo "  1) Install  2) Skip"
-  c=$(read_choice "Choice (1-2): " "1" "2")
-  if [[ "$c" == "1" ]]; then
+  if [[ "$CHOICE_DOCKER" == "1" ]]; then
     if sudo pacman -S --noconfirm --needed docker docker-compose 2>/dev/null; then
       sudo systemctl enable --now docker.service 2>/dev/null
       sudo usermod -aG docker "$(whoami)" 2>/dev/null
@@ -298,22 +436,18 @@ else
     else
       log_warn "Install failed"
     fi
+  else
+    log_info "Skipped"
   fi
 fi
 echo ""
 
 # ---- Step 8: Podman ----
-log_info "Step 8/11: Podman"
-podman_installed=0
-pacman -Q podman &>/dev/null && podman_installed=1
+log_info "Step 8/13: Podman"
 if [[ $podman_installed -eq 1 ]]; then
-  echo "  1) Update  2) Skip"
-  c=$(read_choice "Choice (1-2): " "1" "2")
-  [[ "$c" == "1" ]] && sudo pacman -S -u --noconfirm podman 2>/dev/null || true
+  [[ "$CHOICE_PODMAN" == "1" ]] && { sudo pacman -S -u --noconfirm podman 2>/dev/null || true; log_ok "Updated"; } || log_info "Skipped"
 else
-  echo "  1) Install  2) Skip"
-  c=$(read_choice "Choice (1-2): " "1" "2")
-  if [[ "$c" == "1" ]]; then
+  if [[ "$CHOICE_PODMAN" == "1" ]]; then
     if sudo pacman -S --noconfirm --needed podman 2>/dev/null; then
       log_ok "Podman installed"
       podman_post_install
@@ -321,24 +455,118 @@ else
     else
       log_warn "Install failed"
     fi
+  else
+    log_info "Skipped"
   fi
 fi
 echo ""
 
 # ---- Step 9: Lazydocker ----
-log_info "Step 9/11: Lazydocker (TUI for Docker/Podman)"
-if [[ $docker_installed -eq 1 || $podman_installed -eq 1 ]]; then
-  inst_ld=$(read_yes_no "Install lazydocker? (yes/no): ")
-  if [[ "$inst_ld" == "yes" ]]; then
-    curl -sSL https://raw.githubusercontent.com/jesseduffield/lazydocker/master/scripts/install_update_linux.sh | bash -s -- -d "$HOME/.local/bin" 2>/dev/null && log_ok "Installed to ~/.local/bin" || log_warn "Install failed"
-  fi
+log_info "Step 9/13: Lazydocker"
+if [[ "$INST_LAZYDOCKER" == "yes" ]]; then
+  curl -sSL https://raw.githubusercontent.com/jesseduffield/lazydocker/master/scripts/install_update_linux.sh | bash -s -- -d "$HOME/.local/bin" 2>/dev/null && log_ok "Installed/updated to ~/.local/bin" || log_warn "Install failed"
 else
-  log_info "Skipped (no Docker/Podman)"
+  log_info "Skipped"
 fi
 echo ""
 
-# ---- Step 10: fzf bindings ----
-log_info "Step 10/11: fzf"
+# ---- Step 10: Snapper configuration ----
+log_info "Step 10/13: Snapper configuration"
+if [[ "$CONF_SNAPPER" == "yes" ]]; then
+  # Arch Wiki approach: snapper create-config creates a nested .snapshots subvolume,
+  # but we already have @snapshots mounted at /.snapshots from install.sh.
+  # Fix: unmount, let snapper create its config, delete its subvolume, remount ours.
+  sudo umount /.snapshots 2>/dev/null || true
+  sudo rmdir /.snapshots 2>/dev/null || true
+  if sudo snapper -c root create-config /; then
+    sudo btrfs subvolume delete /.snapshots 2>/dev/null || true
+    sudo mkdir -p /.snapshots
+    sudo mount /.snapshots
+    sudo chmod 750 /.snapshots
+    # Tune snapper limits
+    sudo sed -i \
+      's/^TIMELINE_CREATE=.*/TIMELINE_CREATE="yes"/;
+       s/^TIMELINE_LIMIT_DAILY=.*/TIMELINE_LIMIT_DAILY="5"/;
+       s/^NUMBER_LIMIT=.*/NUMBER_LIMIT="5-10"/' \
+      /etc/snapper/configs/root
+    # Enable btrfs quota for space-aware cleanup
+    sudo btrfs quota enable / 2>/dev/null || true
+    log_ok "Snapper configured"
+    # Verify with a test snapshot
+    if sudo snapper -c root create --description "setup-test $(date +%Y-%m-%d_%H:%M)"; then
+      log_ok "Test snapshot created (verify with: sudo snapper -c root list)"
+    else
+      log_warn "Test snapshot failed"
+    fi
+  else
+    sudo mkdir -p /.snapshots
+    sudo mount /.snapshots 2>/dev/null || true
+    log_warn "Snapper create-config failed"
+  fi
+else
+  log_info "Skipped"
+fi
+echo ""
+
+# ---- Step 11: Limine snapshot menu ----
+log_info "Step 11/13: Limine snapshot menu"
+if [[ "$INST_LIMINE_MENU" == "yes" ]]; then
+  LIMINE_SCRIPT='/usr/local/bin/limine-snapper-menu.sh'
+  sudo tee "$LIMINE_SCRIPT" >/dev/null <<'LIMINE_SCRIPT_END'
+#!/bin/bash
+# Regenerate Limine boot menu: current root + snapper snapshots (read-only recovery)
+set -e
+ROOT_UUID=$(findmnt -n -o UUID /)
+CFG="/boot/EFI/arch-limine/limine.conf"
+mkdir -p "$(dirname "$CFG")"
+
+SNAP_BASE=$(snapper -c root get-config 2>/dev/null | grep SUBVOLUME | sed 's/.*= *//' || true)
+[[ -z "$SNAP_BASE" ]] && SNAP_BASE="/.snapshots"
+
+{
+  echo "timeout: 5"
+  echo ""
+  echo "/Arch Linux"
+  echo "    protocol: linux"
+  echo "    path: boot():/vmlinuz-linux"
+  echo "    cmdline: root=UUID=${ROOT_UUID} rootfstype=btrfs rootflags=subvol=@ rw"
+  echo "    module_path: boot():/initramfs-linux.img"
+
+  # Snapshots: boot read-only for recovery/inspection; use snap-rollback to make permanent
+  snapper -c root list --columns number,type,description,date 2>/dev/null | tail -n +3 | while IFS='|' read -r num type desc date; do
+    num=$(echo "$num" | tr -d ' ')
+    type=$(echo "$type" | tr -d ' ')
+    desc=$(echo "$desc" | sed 's/^ *//;s/ *$//')
+    date=$(echo "$date" | sed 's/^ *//;s/ *$//')
+    [[ "$type" != "single" ]] && continue
+    [[ -z "$num" || "$num" == "0" ]] && continue
+    DIR="${SNAP_BASE}/${num}/snapshot"
+    [[ -d "$DIR" ]] || continue
+    SNAP_SUBVOL="@snapshots/${num}/snapshot"
+    LABEL="#${num}"
+    [[ -n "$desc" ]] && LABEL="#${num} ${desc}"
+    [[ -n "$date" ]] && LABEL="${LABEL} (${date})"
+    echo ""
+    echo "/Snapshot ${LABEL}"
+    echo "    protocol: linux"
+    echo "    path: boot():/vmlinuz-linux"
+    echo "    cmdline: root=UUID=${ROOT_UUID} rootfstype=btrfs rootflags=subvol=${SNAP_SUBVOL} ro"
+    echo "    module_path: boot():/initramfs-linux.img"
+  done
+} > "$CFG"
+cp "$CFG" /boot/limine.conf
+echo "Limine menu updated: $(grep -c '^/' "$CFG") entries"
+LIMINE_SCRIPT_END
+  sudo chmod +x "$LIMINE_SCRIPT"
+  (sudo crontab -l 2>/dev/null | grep -v limine-snapper-menu; echo "0 3 * * * /usr/local/bin/limine-snapper-menu.sh") | sudo crontab - 2>/dev/null && log_ok "Script and daily cron (3am) installed" || log_ok "Script installed"
+  sudo "$LIMINE_SCRIPT" 2>/dev/null && log_ok "Menu updated" || log_warn "First menu run failed (run snap or wait for snapshot)"
+else
+  log_info "Skipped"
+fi
+echo ""
+
+# ---- Step 12: fzf ----
+log_info "Step 12/13: fzf"
 if command -v fzf &>/dev/null; then
   [[ -f /usr/share/fzf/key-bindings.bash ]] && cp /usr/share/fzf/key-bindings.bash "$CONFIG/fzf/" 2>/dev/null
   [[ -f /usr/share/fzf/completion.bash ]]   && cp /usr/share/fzf/completion.bash "$CONFIG/fzf/" 2>/dev/null
@@ -348,8 +576,8 @@ else
 fi
 echo ""
 
-# ---- Step 11: Cleanup and optimizations ----
-log_info "Step 11/11: Cleanup and optimizations"
+# ---- Step 13: Cleanup ----
+log_info "Step 13/13: Cleanup and optimizations"
 sudo pacman -Scc --noconfirm 2>/dev/null && log_ok "Pacman cache cleared" || log_warn "Cache cleanup skipped"
 orphans=$(pacman -Qdtq 2>/dev/null)
 [[ -n "$orphans" ]] && sudo pacman -Rns --noconfirm $orphans 2>/dev/null && log_ok "Orphans removed" || true
