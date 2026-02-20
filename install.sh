@@ -11,16 +11,28 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # Constants
 # -----------------------------------------------------------------------------
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly CYAN='\033[0;36m'
-readonly BLUE='\033[0;34m'
+readonly WHITE='\033[37m'
+readonly RED='\033[31m'
+readonly GREEN='\033[32m'
+readonly YELLOW='\033[33m'
+readonly BLUE='\033[34m'
+readonly MAGENTA='\033[35m'
+readonly CYAN='\033[36m'
+readonly GRAY='\033[90m'
+readonly LRED='\033[91m'
+readonly LGREEN='\033[92m'
+readonly LYELLOW='\033[93m'
+readonly LBLUE='\033[94m'
+readonly LMAGENTA='\033[95m'
+readonly LCYAN='\033[96m'
+readonly LWHITE='\033[97m'
 readonly BOLD='\033[1m'
 readonly DIM='\033[2m'
 readonly NC='\033[0m'
 
 readonly VERSION="${VERSION:-N/A}"
+
+readonly AUTHORSTRING="${DIM}by ${LGREEN}e${LYELLOW}a${LMAGENTA}a${LBLUE}n${LGREEN}n${LYELLOW}i${LMAGENTA}s${LBLUE}t${NC}"
 
 # Header logo
 
@@ -30,7 +42,8 @@ show_logo() {
 ██▄  ▄██ ▄▄ ▄▄  ▄▄ ▄▄ ▄▄▄▄  ▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄ 
 ██ ▀▀ ██ ██ ███▄██ ██ ██▀██ ██   ██   ██▄▄  
 ██    ██ ██ ██ ▀██ ██ ████▀ ██   ██   ██▄▄▄ 
-                                     ${DIM}v${VERSION:-N/A}
+                                ${AUTHORSTRING}
+                                     ${GRAY}v${VERSION:-N/A}
 "
   echo -e "${NC}"
 }
@@ -38,11 +51,11 @@ show_logo() {
 # -----------------------------------------------------------------------------
 # Logging and input helpers (prompts/errors to stderr for use in command substitution)
 # -----------------------------------------------------------------------------
-log_info()  { echo -e "${CYAN}[*]${NC} $1"; }
-log_ok()    { echo -e "${GREEN}[ok]${NC} $1"; }
-log_warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
-log_err()   { echo -e "${RED}[x]${NC} $1"; }
-log_ask()   { echo -e "${BLUE}[?]${NC} $1"; }
+log_info()  { echo -e "${LCYAN}[*]${NC} $1"; }
+log_ok()    { echo -e "${LGREEN}[+]${NC} $1"; }
+log_warn()  { echo -e "${LYELLOW}[!]${NC} $1"; }
+log_err()   { echo -e "${LRED}[x]${NC} $1"; }
+log_ask()   { echo -e "${LBLUE}[?]${NC} $1"; }
 die()       { log_err "$1"; exit 1; }
 
 read_choice() {
@@ -119,7 +132,7 @@ detect_firmware_packages() {
 # =============================================================================
 clear
 show_logo
-echo -e "  ${BOLD}minidite${NC}  ${DIM}-- minimal Arch install${NC}"
+echo -e "  ${BOLD}${LYELLOW}minidite${NC}  ${GRAY}-- minimal Arch install${NC}"
 echo ""
 
 # ---- Step 1: Disk (destructive; confirm explicitly) ----
@@ -377,8 +390,22 @@ cp /usr/share/limine/BOOTX64.EFI /boot/EFI/arch-limine/ || fail "Copy Limine EFI
 # Limine searches: <EFI app dir>/limine.conf, then /boot/limine.conf, etc.
 cat > /boot/EFI/arch-limine/limine.conf <<LIMINE
 timeout: 5
+default_entry: 2
+interface_branding: Minidite v${VERSION}
+interface_branding_color: 6
+interface_help_color: 6
+hash_mismatch_panic: no
 
-/Arch Linux
+term_background: 000000
+backdrop: 000000
+term_foreground: f0e0a0
+term_foreground_bright: f8ecb8
+term_background_bright: 141410
+term_palette: 0c0c0c;e06060;70c870;f0e0a0;5080c0;a070c0;56c8d8;a8a898
+term_palette_bright: 2a2a28;f08080;90e890;f8ecb8;70a0e0;c090e0;70e8f0;d0d0c0
+
+/+ Minidite
+// linux
     protocol: linux
     path: boot():/vmlinuz-linux
     cmdline: root=UUID=${ROOT_UUID} rootfstype=btrfs rootflags=subvol=@ rw
@@ -481,8 +508,23 @@ echo ""
 
 log_ok "Install complete."
 echo ""
-echo "  Next:"
-echo "    1. reboot"
-echo "    2. Log in as ${USER}"
-echo "    3. Run:  curl -fsSL https://x.acridite.cc/minidite/setup | bash"
+echo -e "${BOLD}${LCYAN}=== Install Summary ===${NC}"
+echo -e "  ${LCYAN}Disk:${NC}        ${LWHITE}${DISK}${NC} (GPT, ESP 512MiB + Btrfs)"
+echo -e "  ${LCYAN}Btrfs:${NC}       ${LWHITE}subvolumes @, @snapshots${NC}"
+echo -e "  ${LCYAN}ESP:${NC}         ${LWHITE}/boot${NC} (FAT32, ${GRAY}${BOOT_UUID}${NC})"
+echo -e "  ${LCYAN}Root:${NC}        ${GRAY}UUID=${ROOT_UUID}${NC}"
+echo -e "  ${LCYAN}Bootloader:${NC}  ${LWHITE}Limine${NC} (EFI + limine.conf)"
+echo -e "  ${LCYAN}Initramfs:${NC}   ${LWHITE}mkinitcpio${NC} (udev hooks, btrfs module)"
+echo -e "  ${LCYAN}Hostname:${NC}    ${LYELLOW}${HOSTNAME}${NC}"
+echo -e "  ${LCYAN}User:${NC}        ${LYELLOW}${USER}${NC} (wheel, NOPASSWD sudo)"
+echo -e "  ${LCYAN}Locale:${NC}      ${LWHITE}${LOCALE} / ${KEYMAP}${NC}"
+echo -e "  ${LCYAN}Timezone:${NC}    ${LWHITE}${TIMEZONE}${NC}"
+echo -e "  ${LCYAN}Services:${NC}    ${LWHITE}NetworkManager${NC}"
+echo -e "  ${LCYAN}Firmware:${NC}    ${LWHITE}${FIRMWARE_PACKAGES:-none}${NC}"
+echo -e "  ${LCYAN}Packages:${NC}    ${GRAY}${BASE_PKGS}${NC}"
+echo ""
+echo -e "  ${BOLD}${LWHITE}Next steps:${NC}"
+echo -e "    ${GRAY}1.${NC} ${LYELLOW}reboot${NC}"
+echo -e "    ${GRAY}2.${NC} Log in as ${BOLD}${LYELLOW}${USER}${NC}"
+echo -e "    ${GRAY}3.${NC} Run:  ${LYELLOW}curl -fsSL https://x.acridite.cc/minidite/setup | bash${NC}"
 echo ""

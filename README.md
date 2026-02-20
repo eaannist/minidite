@@ -8,8 +8,8 @@ Minimal Arch Linux server: interactive install and setup. Kept as light as possi
 
 ## Features
 
-- **install.sh** (from [Arch ISO](https://archlinux.org/download/), root): minimal base only (base, linux, sudo, networkmanager, curl, **Limine**, **Snapper**; optional firmware; no openssh/git). Single Btrfs root (@) with @snapshots, Limine bootloader, Snapper for timeline snapshots. See [install.sh](#installsh) below.
-- **setup.sh** (after first login, user): optional CLI packages, configs, optional OpenSSH, SSH keys, Docker/Podman, **Limine snapshot menu** (boot menu with snapshots). Re-run asks before overwriting configs. See [setup.sh](#setupsh) below.
+- **install.sh** (from [Arch ISO](https://archlinux.org/download/), root): minimal base only (base, linux, sudo, networkmanager, curl, **Limine**, **Snapper**; optional firmware; no openssh). Single Btrfs root (@) with @snapshots, Limine bootloader with custom theme. Snapper is installed but configured in setup. See [install.sh](#installsh) below.
+- **setup.sh** (after first login, user): optional CLI packages, configs, optional OpenSSH, SSH keys (server + client, optional password disable), Docker/Podman, **Snapper config** (1 daily snapshot at 4am, max 5 total), **Limine snapshot menu** (tree: Minidite > linux, Snapshots). Re-run asks before overwriting configs. See [setup.sh](#setupsh) below.
 
 ## Quick start
 
@@ -32,15 +32,15 @@ Run once as **root** from an Arch Linux live ISO. It performs a minimal installa
 2. **Network check:** verifies connectivity (ping) before installing.
 3. **Mirrorlist:** if a country was chosen, downloads mirrorlist for that country (HTTPS, mirror status) and uses it for pacman.
 4. **Partitioning:** GPT table, EFI partition **512 MiB** (FAT32), remaining space as single root partition (Btrfs). ESP flag set on EFI.
-5. **Btrfs:** root partition is formatted Btrfs; subvolumes **`@`** (root only; includes /home and /var) and **`@snapshots`** (for Snapper). Mount options: `compress=zstd:1`, `space_cache=v2`, `noatime`, `discard=async`, `ssd`, `commit=120`. No reserved blocks; Btrfs quota enabled with limit on `/.snapshots`.
+5. **Btrfs:** root partition formatted Btrfs; subvolumes **`@`** (root; includes /home, /var) and **`@snapshots`** (for Snapper). Mount options: `compress=zstd:1`, `space_cache=v2`, `noatime`, `discard=async`, `ssd`, `commit=120`. No reserved blocks.
 6. **Base install:** `pacstrap` (cache on target; cleared in chroot), minimal package list below (firmware only if selected).
-7. **Chroot configuration:** timezone, single locale, KEYMAP, hostname, `/etc/hosts`, journald 50M limit, **Limine** (ESP mounted at `/boot`, limine.cfg with root entry using `rootflags=subvol=@`; kernel and initramfs on ESP so Limine can read them), `mkinitcpio -P` with btrfs in MODULES and HOOKS, NetworkManager, user, sudo, `~/.ssh`. **Snapper** config `root`: timeline daily, 5 kept, NUMBER_LIMIT 5–10. Pacman cache cleared in chroot.
+7. **Chroot configuration:** timezone, single locale, KEYMAP, hostname, `/etc/hosts`, journald 50M limit, **Limine** (ESP at `/boot`, `limine.conf` with tree menu, custom theme black/yellow/cyan, `rootflags=subvol=@`; kernel and initramfs on ESP), `mkinitcpio -P` with btrfs in MODULES and udev-based HOOKS, NetworkManager, user, sudo, `~/.ssh`. Snapper is installed but not configured (setup does that). Pacman cache cleared in chroot.
 8. **Directories:** creates `~/.config`, `~/.local/bin`, `~/.cache` for the new user and ownership.
 9. **Unmount** and next steps (reboot, login, run setup).
 
-**Btrfs layout:** Single active subvolume **@** for / (includes /home, /var). **@snapshots** is mounted at `/.snapshots` with quota limit (e.g. 20G). Snapper stores timeline and manual snapshots there. **Limine** is used instead of GRUB; ESP is mounted at `/boot` (FAT) so kernel and initramfs are on the ESP for Limine to load.
+**Btrfs layout:** Single active subvolume **@** for / (includes /home, /var). **@snapshots** is mounted at `/.snapshots`. Snapper (configured in setup) stores max 5 snapshots (1 daily at 4am + manual). **Limine** is used instead of GRUB; ESP at `/boot` (FAT) so kernel and initramfs are on the ESP for Limine to load. Custom theme: black background, light yellow foreground, cyan accent.
 
-**Disk usage and what to expect:** (1) **No 5% reserved** – full partition usable. (2) **Compression** zstd:1 – good space savings. (3) **Snapshots** – 5 timeline + manual; reserve ~15–20% disk for snapshot buffer. (4) Firmware, pacman cache, journal 50M as before.
+**Disk usage:** (1) No 5% reserved. (2) Compression zstd:1. (3) Max 5 snapshots total. (4) Firmware, pacman cache, journal 50M.
 
 **Packages installed (pacstrap):**
 
@@ -53,7 +53,7 @@ Run once as **root** from an Arch Linux live ISO. It performs a minimal installa
 | networkmanager | Networking |
 | curl | HTTP client (for setup bootstrap) |
 | limine | Bootloader (replaces GRUB) |
-| snapper | Root snapshot management (timeline + manual) |
+| snapper | Root snapshot management (configured in setup) |
 | btrfs-progs | Btrfs tools and fsck |
 | efibootmgr | EFI boot entry (Limine) |
 
@@ -65,18 +65,18 @@ Run as **normal user** after first login (after install.sh and reboot). Optional
 
 **What it does:**
 
-1. **Packages (optional):** asks whether to install recommended CLI tools (micro, btop, zoxide, fzf, ripgrep, eza, unzip, tree, nerd font, fastfetch). Skip for a minimal install (configs only).
+1. **Packages (optional):** install recommended CLI tools (micro, btop, zoxide, fzf, ripgrep, eza, unzip, tree, nerd font, fastfetch).
 2. **Directories:** ensures `~/.config/oh-my-posh`, `~/.config/micro`, `~/.config/fastfetch`, `~/.config/fzf`, `~/.local/bin`, `~/.cache/bash` exist.
-3. **Configs:** downloads from repo `home/` into `$HOME` (`.bashrc`, theme.omp.json, micro/fastfetch configs, minidite-version). If setup was already run (detected via "minidite" in `.bashrc`), asks before overwriting.
-4. **OpenSSH server (optional):** asks to install and configure OpenSSH; if yes, installs openssh, appends ClientAliveInterval/etc. to `sshd_config`, enables and starts sshd.
-5. **SSH keys:** if no key exists, offers to generate `id_ed25519` and add to `authorized_keys`. If key exists but `authorized_keys` is empty, offers to add it. If both present, step is skipped.
-6. **Optional Docker:** install Docker (engine + compose), enable docker.service, add user to group docker; if Docker is installed, lazydocker (TUI) is installed to `~/.local/bin`.
-7. **Optional Podman:** install Podman; post-install: unqualified-search registries (docker.io), subuid/subgid for rootless if missing, user socket (podman.socket) for Docker-compatible API.
-8. **Lazydocker (optional):** if Docker or Podman is installed, offers to install lazydocker to `~/.local/bin`.
-9. **Limine snapshot menu (optional):** if Snapper and `/.snapshots` exist, offers to install a script that regenerates the Limine boot menu with current root and all snapshots (so you can boot a snapshot from the menu). Installs `/usr/local/bin/limine-snapper-menu.sh` and a daily cron (3am).
-10. **Oh My Posh:** if the binary is missing, install to `~/.local/bin` via the official script.
-11. **Pacman cache:** cleared at end to free disk space.
-12. **Post-setup:** orphan packages removed, `fstrim.timer` enabled (weekly TRIM), `paccache.timer` enabled if pacman-contrib is installed.
+3. **Configs:** downloads from repo `home/` into `$HOME` (`.bashrc`, theme.omp.json, micro/fastfetch configs, minidite-version). Copies minidite-version to `/etc` for bootloader. Asks before overwriting if already run.
+4. **OpenSSH (optional):** install and harden (PermitRootLogin no, MaxAuthTries 3, drop-in configs).
+5. **SSH keys:** server key (for outgoing connections); client key (paste your PC's public key for remote login); optional disable password auth (only after client key is in authorized_keys). Use `ssh-lockdown` / `ssh-unlock` later.
+6. **Snapper (optional):** if `/.snapshots` exists, configure root: 1 daily snapshot at 4am, max 5 total (manual + auto), `snapper-cleanup.timer` enabled.
+7. **Limine snapshot menu (optional):** install `/usr/local/bin/limine-snapper-menu.sh`; regenerates boot menu with tree (Minidite > linux, Snapshots > entries); daily cron at 3am; version in branding.
+8. **Docker (optional):** engine + compose, docker.service, user in docker group.
+9. **Podman (optional):** rootless setup, podman.socket.
+10. **Lazydocker (optional):** TUI to `~/.local/bin` if Docker/Podman present.
+11. **Oh My Posh (optional):** install to `~/.local/bin`.
+12. **Cleanup:** pacman cache cleared, orphans removed, fstrim.timer, paccache.timer.
 
 **Packages installed (pacman):**
 
@@ -114,21 +114,21 @@ Run as **normal user** after first login (after install.sh and reboot). Optional
 | | cdf | Cd into directory (fuzzy pick) |
 | | ff | Fuzzy find file (e.g. micro \$(ff)) |
 | | (key bindings) | Ctrl+R history, Ctrl+T files, Alt+C cd |
-| **Git** | g, ga, gaa | git, add, add --all |
-| | gb, gc, gca, gco | branch, commit, amend, checkout |
-| | gd, gl, gla | diff, log, log --all |
-| | gp, gpl | push, pull |
-| | gs, gst, gstp, gsw | status, stash, stash pop, switch |
-| | gu-set \<name\> | Set git user.name |
-| | gu-get | Show git user and email |
 | **System** | sysinfo | fastfetch with custom logo |
 | | reboot, poweroff, shutdown | sudo wrapper |
-| **Snapshot** | snap | create manual root snapshot (Snapper); update Limine menu if script present |
+| **Snapshot** | snap [desc] | Create manual snapshot; update Limine menu |
+| | snap-ls | List snapshots |
+| | snap-diff \<num\> | Diff snapshot vs current |
+| | snap-rm \<num\> | Delete snapshot |
+| | snap-rollback \<num\> | Rollback root to snapshot (reboot required) |
+| **SSH** | ssh-lockdown | Disable password auth (key-only) |
+| | ssh-unlock | Re-enable password auth |
+| **Lazydocker** | ld-podman | Set DOCKER_HOST to Podman socket |
+| | ld-reset | Unset DOCKER_HOST (use Docker) |
 | **Network** | ip, ipa, ipr | ip with colors |
 | | ping | 4 packets |
 | | ports | Listening ports (ss -tulpn) |
 | | ipp | Public IP address |
-| | ipl | Local IP address |
 
 ## Links
 
