@@ -8,8 +8,8 @@ Minimal Arch Linux server: interactive install and setup. Kept as light as possi
 
 ## Features
 
-- **install.sh** (from [Arch ISO](https://archlinux.org/download/), root): minimal base only (base, linux, sudo, networkmanager, curl, **Limine**, **Snapper**; optional firmware; no openssh). Single Btrfs root (@) with @snapshots, Limine bootloader with custom theme. Snapper is installed but configured in setup. See [install.sh](#installsh) below.
-- **setup.sh** (after first login, user): optional CLI packages, configs, optional OpenSSH, SSH keys (server + client, optional password disable), Docker/Podman, **Snapper config** (1 daily snapshot at 4am, max 5 total), **Limine snapshot menu** (tree: Minidite > linux, Snapshots). Re-run asks before overwriting configs. See [setup.sh](#setupsh) below.
+- **install.sh** (from [Arch ISO](https://archlinux.org/download/), root): minimal base only (base, linux, sudo, networkmanager, curl, **Limine**, **Snapper**; optional firmware; no openssh). Single Btrfs root (@) with @snapshots, Limine bootloader (minimal config; setup applies full config). Snapper is installed but configured in setup. See [install.sh](#installsh) below.
+- **setup.sh** (after first login, user): optional CLI packages, configs, optional OpenSSH, SSH keys (server + client, optional password disable), Docker/Podman, **Snapper config** (timeline: 5 daily, number: 5 manual), **Limine snapshot menu** (limine-snapper-sync; Minidite > linux | Snapshots). Re-run asks before overwriting configs. See [setup.sh](#setupsh) below.
 
 ## Quick start
 
@@ -34,11 +34,11 @@ Run once as **root** from an Arch Linux live ISO. It performs a minimal installa
 4. **Partitioning:** GPT table, EFI partition **512 MiB** (FAT32), remaining space as single root partition (Btrfs). ESP flag set on EFI.
 5. **Btrfs:** root partition formatted Btrfs; subvolumes **`@`** (root; includes /home, /var) and **`@snapshots`** (for Snapper). Mount options: `compress=zstd:1`, `space_cache=v2`, `noatime`, `discard=async`, `ssd`, `commit=120`. No reserved blocks.
 6. **Base install:** `pacstrap` (cache on target; cleared in chroot), minimal package list below (firmware only if selected).
-7. **Chroot configuration:** timezone, single locale, KEYMAP, hostname, `/etc/hosts`, journald 50M limit, **Limine** (ESP at `/boot`, `limine.conf` with tree menu, custom theme black/yellow/cyan, `rootflags=subvol=@`; kernel and initramfs on ESP), `mkinitcpio -P` with btrfs in MODULES and udev-based HOOKS, NetworkManager, user, sudo, `~/.ssh`. Snapper is installed but not configured (setup does that). Pacman cache cleared in chroot.
+7. **Chroot configuration:** timezone, single locale, KEYMAP, hostname, `/etc/hosts`, journald 50M limit, **Limine** (ESP at `/boot`, minimal `limine.conf` with single boot entry; setup overwrites with tree menu, `//Snapshots`, theme), `mkinitcpio -P` with btrfs in MODULES and udev-based HOOKS, NetworkManager, user, sudo, `~/.ssh`. Snapper is installed but not configured (setup does that). Pacman cache cleared in chroot. Note: `btrfs-overlayfs` (for snapshot boot) is added in setup when Limine menu is configured.
 8. **Directories:** creates `~/.config`, `~/.local/bin`, `~/.cache` for the new user and ownership.
 9. **Unmount** and next steps (reboot, login, run setup).
 
-**Btrfs layout:** Single active subvolume **@** for / (includes /home, /var). **@snapshots** is mounted at `/.snapshots`. Snapper (configured in setup) stores max 5 snapshots (1 daily at 4am + manual). **Limine** is used instead of GRUB; ESP at `/boot` (FAT) so kernel and initramfs are on the ESP for Limine to load. Custom theme: black background, light yellow foreground, cyan accent.
+**Btrfs layout:** Single active subvolume **@** for / (includes /home, /var). **@snapshots** is mounted at `/.snapshots`. Snapper (configured in setup) uses timeline (5 daily snapshots via `snapper-timeline.timer`) and number cleanup (5 manual). **Limine** is used instead of GRUB; ESP at `/boot` (FAT) so kernel and initramfs are on the ESP for Limine to load. Custom theme: black background, light yellow foreground, cyan accent.
 
 **Disk usage:** (1) No 5% reserved. (2) Compression zstd:1. (3) Max 5 snapshots total. (4) Firmware, pacman cache, journal 50M.
 
@@ -70,8 +70,8 @@ Run as **normal user** after first login (after install.sh and reboot). Optional
 3. **Configs:** downloads from repo `home/` into `$HOME` (`.bashrc`, theme.omp.json, micro/fastfetch configs, minidite-version). Copies minidite-version to `/etc` for bootloader. Asks before overwriting if already run.
 4. **OpenSSH (optional):** install and harden (PermitRootLogin no, MaxAuthTries 3, drop-in configs).
 5. **SSH keys:** server key (for outgoing connections); client key (paste your PC's public key for remote login); optional disable password auth (only after client key is in authorized_keys). Use `ssh-lockdown` / `ssh-unlock` later.
-6. **Snapper (optional):** if `/.snapshots` exists, configure root: 1 daily snapshot at 4am, max 5 total (manual + auto), `snapper-cleanup.timer` enabled.
-7. **Limine snapshot menu (optional):** install `/usr/local/bin/limine-snapper-menu.sh`; regenerates boot menu with tree (Minidite > linux, Snapshots > entries); daily cron at 3am; version in branding.
+6. **Snapper (optional):** if `/.snapshots` exists, configure root: timeline snapshots (5 daily via `snapper-timeline.timer`), number cleanup (5 manual), `snapper-cleanup.timer`.
+7. **Limine snapshot menu (optional):** install `limine-snapper-sync` and `limine-mkinitcpio-hook` from OPR (Omarchy Package Repository) or AUR (via yay). Syncs snapshots to boot menu; `limine-snapper-sync.service` for automatic updates.
 8. **Docker (optional):** engine + compose, docker.service, user in docker group.
 9. **Podman (optional):** rootless setup, podman.socket.
 10. **Lazydocker (optional):** TUI to `~/.local/bin` if Docker/Podman present.
@@ -92,6 +92,15 @@ Run as **normal user** after first login (after install.sh and reboot). Optional
 | tree | Directory tree |
 | ttf-firacode-nerd | Nerd Font for prompt and eza |
 | fastfetch | System info with custom logo |
+
+**Limine snapshot menu packages (OPR first, AUR fallback):**
+
+| Package | Source | Purpose |
+|---------|--------|--------|
+| limine-snapper-sync | OPR / AUR | Sync Snapper snapshots to Limine boot menu |
+| limine-mkinitcpio-hook | OPR / AUR | Run limine-update on kernel updates |
+| mkinitcpio-btrfs | OPR / AUR | btrfs-overlayfs hook for booting into snapshots |
+| yay | AUR | AUR helper (installed only if OPR fails) |
 
 ---
 
@@ -135,5 +144,6 @@ Run as **normal user** after first login (after install.sh and reboot). Optional
 - **Install:** https://x.acridite.cc/minidite/install
 - **Setup:** https://x.acridite.cc/minidite/setup
 - **Repo:** https://github.com/eaannist/minidite
+- **Omarchy (OPR):** https://pkgs.omarchy.org – pre-built Limine/Snapper packages
 
 MIT.

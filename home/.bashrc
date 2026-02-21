@@ -25,18 +25,18 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
-AUTHORSTRING="${DIM}by ${LGREEN}e${LYELLOW}a${LMAGENTA}a${LBLUE}n${LGREEN}n${LYELLOW}i${LMAGENTA}s${LBLUE}t${NC}"
+AUTHORSTRING="${LGREEN}e${LYELLOW}a${LMAGENTA}a${LRED}n${LGREEN}n${LYELLOW}i${LMAGENTA}s${LRED}t${NC}"
 
 # Header logo
 
 show_logo() {
   echo -e "${CYAN}"
   echo -e "
-██▄  ▄██ ▄▄ ▄▄  ▄▄ ▄▄ ▄▄▄▄  ▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄ 
-██ ▀▀ ██ ██ ███▄██ ██ ██▀██ ██   ██   ██▄▄  
-██    ██ ██ ██ ▀██ ██ ████▀ ██   ██   ██▄▄▄ 
-                                ${AUTHORSTRING}
-                                     ${GRAY}v${VERSION:-N/A}
+  ██▄  ▄██ ▄▄ ▄▄  ▄▄ ▄▄ ▄▄▄▄  ▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄
+  ██ ▀▀ ██ ██ ███▄██ ██ ██▀██ ██   ██   ██▄▄ 
+  ██    ██ ██ ██ ▀██ ██ ████▀ ██   ██   ██▄▄▄
+
+  ${AUTHORSTRING}                             ${GRAY}v${VERSION:-N/A}
 "
   echo -e "${NC}"
 }
@@ -120,6 +120,7 @@ alias root='sudo su'
 alias reboot='sudo reboot'
 alias poweroff='sudo poweroff'
 alias shutdown='sudo shutdown'
+alias setup='curl -fsSL x.acridite.cc/minidite/setup | bash'
 
 # -----------------------------------------------------------------------------
 # Network
@@ -216,8 +217,10 @@ ssh-unlock() {
 }
 snap() {
   sudo snapper -c root create -c number --description "${1:-manual $(date +%Y-%m-%d_%H:%M)}" || return 1
+  sudo snapper -c root cleanup number 2>/dev/null || true
+  sudo snapper -c root cleanup timeline 2>/dev/null || true
   echo "Snapshot created."
-  [[ -x /usr/local/bin/limine-snapper-menu.sh ]] && sudo /usr/local/bin/limine-snapper-menu.sh && echo "Limine boot menu updated."
+  command -v limine-snapper-sync &>/dev/null && sudo limine-snapper-sync && echo "Limine boot menu updated."
 }
 snap-ls() { sudo snapper -c root list; }
 snap-diff() {
@@ -227,7 +230,9 @@ snap-diff() {
 snap-rm() {
   [[ -z "$1" ]] && { echo "Usage: snap-rm <num>"; return 1; }
   sudo snapper -c root delete "$1" && echo "Snapshot $1 deleted."
-  [[ -x /usr/local/bin/limine-snapper-menu.sh ]] && sudo /usr/local/bin/limine-snapper-menu.sh
+  sudo snapper -c root cleanup number 2>/dev/null || true
+  sudo snapper -c root cleanup timeline 2>/dev/null || true
+  command -v limine-snapper-sync &>/dev/null && sudo limine-snapper-sync
 }
 snap-rollback() {
   [[ -z "$1" ]] && { echo "Usage: snap-rollback <num>  (rollback root to snapshot)"; return 1; }
@@ -319,10 +324,12 @@ show-help() {
   echo -e "  ${LYELLOW}profile-edit${NC} edit .bashrc"
   echo -e "  ${LYELLOW}theme-edit${NC}   edit Oh My Posh theme"
   echo -e "  ${LYELLOW}reload${NC}       source .bashrc"
+  echo -e "  ${LYELLOW}setup${NC}        run Minidite setup"
   echo ""
 }
 
 [[ -n "$PS1" ]]
+clear
 show_logo
-echo -e "type ${LYELLOW}show-help${NC} for commands reference\n"
+echo -e "${DIM}  type ${YELLOW}show-help${DIM} for commands reference\n${NC}"
 [[ -f "${HOME}/.bashrc.local" ]] && source "${HOME}/.bashrc.local"

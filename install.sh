@@ -8,6 +8,11 @@
 # =============================================================================
 set -euo pipefail
 
+INSTALL_LOG="${INSTALL_LOG:-install.log}"
+[[ "$INSTALL_LOG" != /* ]] && INSTALL_LOG="$(pwd)/$INSTALL_LOG"
+exec > >(tee "$INSTALL_LOG") 2>&1
+echo "=== Minidite install started $(date -Iseconds) ==="
+
 # -----------------------------------------------------------------------------
 # Constants
 # -----------------------------------------------------------------------------
@@ -32,18 +37,18 @@ readonly NC='\033[0m'
 
 readonly VERSION="${VERSION:-N/A}"
 
-readonly AUTHORSTRING="${DIM}by ${LGREEN}e${LYELLOW}a${LMAGENTA}a${LBLUE}n${LGREEN}n${LYELLOW}i${LMAGENTA}s${LBLUE}t${NC}"
+readonly AUTHORSTRING="${LGREEN}e${LYELLOW}a${LMAGENTA}a${LRED}n${LGREEN}n${LYELLOW}i${LMAGENTA}s${LRED}t${NC}"
 
 # Header logo
 
 show_logo() {
   echo -e "${CYAN}"
   echo -e "
-██▄  ▄██ ▄▄ ▄▄  ▄▄ ▄▄ ▄▄▄▄  ▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄ 
-██ ▀▀ ██ ██ ███▄██ ██ ██▀██ ██   ██   ██▄▄  
-██    ██ ██ ██ ▀██ ██ ████▀ ██   ██   ██▄▄▄ 
-                                ${AUTHORSTRING}
-                                     ${GRAY}v${VERSION:-N/A}
+  ██▄  ▄██ ▄▄ ▄▄  ▄▄ ▄▄ ▄▄▄▄  ▄▄ ▄▄▄▄▄▄ ▄▄▄▄▄
+  ██ ▀▀ ██ ██ ███▄██ ██ ██▀██ ██   ██   ██▄▄ 
+  ██    ██ ██ ██ ▀██ ██ ████▀ ██   ██   ██▄▄▄
+
+  ${AUTHORSTRING}                             ${GRAY}v${VERSION:-N/A}
 "
   echo -e "${NC}"
 }
@@ -132,7 +137,6 @@ detect_firmware_packages() {
 # =============================================================================
 clear
 show_logo
-echo -e "  ${BOLD}${LYELLOW}minidite${NC}  ${GRAY}-- minimal Arch install${NC}"
 echo ""
 
 # ---- Step 1: Disk (destructive; confirm explicitly) ----
@@ -280,7 +284,7 @@ run_step "Host prep (mirrorlist, keymap)" '
   ( [[ -z "$MIRROR_COUNTRY" || "$MIRROR_COUNTRY" == "all" ]] ) || \
     { curl -sL "https://archlinux.org/mirrorlist/?country=${MIRROR_COUNTRY}&protocol=https&use_mirror_status=on" | sed "s/^#Server/Server/" > /etc/pacman.d/mirrorlist || true; }
   pacman -Sy --noconfirm 2>/dev/null || true
-  echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
+  printf "KEYMAP=%s\nFONT=lat1-16\n" "${KEYMAP}" > /etc/vconsole.conf
   loadkeys "${KEYMAP}" 2>/dev/null || true
   true
 '
@@ -319,9 +323,9 @@ echo ""
 
 # --- Step 5: Pacstrap ---
 run_step "vconsole.conf (pre-pacstrap)" '
-  mkdir -p /mnt/etc && echo "KEYMAP=${KEYMAP}" > /mnt/etc/vconsole.conf && chmod 644 /mnt/etc/vconsole.conf
+  mkdir -p /mnt/etc && printf "KEYMAP=%s\nFONT=lat1-16\n" "${KEYMAP}" > /mnt/etc/vconsole.conf && chmod 644 /mnt/etc/vconsole.conf
 '
-BASE_PKGS="base linux sudo networkmanager curl limine snapper btrfs-progs efibootmgr"
+BASE_PKGS="base linux sudo networkmanager curl limine btrfs-progs efibootmgr"
 [[ -n "$FIRMWARE_PACKAGES" ]] && BASE_PKGS="${BASE_PKGS} ${FIRMWARE_PACKAGES}"
 run_step "Pacstrap base system" "pacstrap /mnt $BASE_PKGS"
 [[ -n "$MIRROR_COUNTRY" && "$MIRROR_COUNTRY" != "all" ]] && cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
@@ -370,7 +374,7 @@ fi
 grep -q "subvol=@" /etc/fstab || fail "fstab missing subvol=@"
 
 # --- 8b: Base system config ---
-[[ -f /etc/vconsole.conf ]] || { echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf; }
+[[ -f /etc/vconsole.conf ]] || { printf "KEYMAP=%s\nFONT=lat1-16\n" "${KEYMAP}" > /etc/vconsole.conf; }
 ln -sf /usr/share/zoneinfo/${TIMEZONE} /etc/localtime
 hwclock --systohc
 sed -i "/^#${_LOCALE_ESC}/s/^#//" /etc/locale.gen
@@ -382,38 +386,27 @@ printf '127.0.0.1   localhost\n::1         localhost\n127.0.1.1   %s.localdomain
 mkdir -p /etc/systemd/journald.conf.d
 echo -e "[Journal]\nSystemMaxUse=50M" > /etc/systemd/journald.conf.d/00-size.conf
 
-# --- 8c: Limine (based on omarchy reference implementation) ---
-# Copy EFI binary to arch-limine folder
-mkdir -p /boot/EFI/arch-limine
-cp /usr/share/limine/BOOTX64.EFI /boot/EFI/arch-limine/ || fail "Copy Limine EFI"
-# Config file MUST be limine.conf (NOT .cfg) placed NEXT TO the EFI binary
-# Limine searches: <EFI app dir>/limine.conf, then /boot/limine.conf, etc.
-cat > /boot/EFI/arch-limine/limine.conf <<LIMINE
+# --- 8c: Limine (minimal boot entry; setup overwrites with full config) ---
+mkdir -p /boot/EFI/BOOT
+cp /usr/share/limine/BOOTX64.EFI /boot/EFI/BOOT/BOOTX64.EFI || fail "Copy Limine EFI"
+
+# limine.conf requires at least one entry; "config file contains non valid entries" if no entries
+cat > /boot/limine.conf <<LIMINE
 timeout: 5
-default_entry: 2
-interface_branding: Minidite v${VERSION}
-interface_branding_color: 6
-interface_help_color: 6
+interface_branding: Minidite
 hash_mismatch_panic: no
 
-term_background: 000000
-backdrop: 000000
-term_foreground: f0e0a0
-term_foreground_bright: f8ecb8
-term_background_bright: 141410
-term_palette: 0c0c0c;e06060;70c870;f0e0a0;5080c0;a070c0;56c8d8;a8a898
-term_palette_bright: 2a2a28;f08080;90e890;f8ecb8;70a0e0;c090e0;70e8f0;d0d0c0
-
-/+ Minidite
-// linux
-    protocol: linux
-    path: boot():/vmlinuz-linux
-    cmdline: root=UUID=${ROOT_UUID} rootfstype=btrfs rootflags=subvol=@ rw
-    module_path: boot():/initramfs-linux.img
+/Minidite
+  protocol: linux
+  path: boot():/vmlinuz-linux
+  module_path: boot():/initramfs-linux.img
+  cmdline: root=UUID=${ROOT_UUID} rootfstype=btrfs rootflags=subvol=@ rw
 LIMINE
-# Also place a copy at /boot/limine.conf as fallback (standard search path)
-cp /boot/EFI/arch-limine/limine.conf /boot/limine.conf
-efibootmgr --create --disk ${DISK} --part ${ESP_PART_NUM} --label "Arch Linux" --loader /EFI/arch-limine/BOOTX64.EFI --unicode || fail "efibootmgr failed"
+
+efibootmgr --create --disk "${DISK}" --part "${ESP_PART_NUM}" \
+  --label "Minidite" \
+  --loader "\EFI\BOOT\BOOTX64.EFI" \
+  --unicode || fail "efibootmgr failed"
 
 # --- 8d: mkinitcpio ---
 # Arch ships systemd-based HOOKS by default since mkinitcpio v40 (PKGBUILD -Dsystemd_hooks=true).
@@ -479,10 +472,10 @@ run_step "User dirs" '
 log_info "Pre-unmount verification..."
 echo "--- /mnt/etc/fstab ---"
 cat /mnt/etc/fstab
-echo "--- /mnt/boot/EFI/arch-limine/limine.conf ---"
-cat /mnt/boot/EFI/arch-limine/limine.conf 2>/dev/null || echo "(not found)"
-echo "--- /mnt/boot/limine.conf ---"
+echo "--- /mnt/boot/limine.conf (minimal; setup overwrites) ---"
 cat /mnt/boot/limine.conf 2>/dev/null || echo "(not found)"
+echo "--- /mnt/boot/EFI/BOOT/ ---"
+ls -la /mnt/boot/EFI/BOOT/ 2>/dev/null || echo "(not found)"
 echo "--- mkinitcpio.conf (MODULES + HOOKS) ---"
 grep -E "^(MODULES|HOOKS)=" /mnt/etc/mkinitcpio.conf
 echo "--- /sbin/init target ---"
@@ -513,7 +506,7 @@ echo -e "  ${LCYAN}Disk:${NC}        ${LWHITE}${DISK}${NC} (GPT, ESP 512MiB + Bt
 echo -e "  ${LCYAN}Btrfs:${NC}       ${LWHITE}subvolumes @, @snapshots${NC}"
 echo -e "  ${LCYAN}ESP:${NC}         ${LWHITE}/boot${NC} (FAT32, ${GRAY}${BOOT_UUID}${NC})"
 echo -e "  ${LCYAN}Root:${NC}        ${GRAY}UUID=${ROOT_UUID}${NC}"
-echo -e "  ${LCYAN}Bootloader:${NC}  ${LWHITE}Limine${NC} (EFI + limine.conf)"
+echo -e "  ${LCYAN}Bootloader:${NC}  ${LWHITE}Limine${NC} (basic EFI)"
 echo -e "  ${LCYAN}Initramfs:${NC}   ${LWHITE}mkinitcpio${NC} (udev hooks, btrfs module)"
 echo -e "  ${LCYAN}Hostname:${NC}    ${LYELLOW}${HOSTNAME}${NC}"
 echo -e "  ${LCYAN}User:${NC}        ${LYELLOW}${USER}${NC} (wheel, NOPASSWD sudo)"
@@ -522,6 +515,7 @@ echo -e "  ${LCYAN}Timezone:${NC}    ${LWHITE}${TIMEZONE}${NC}"
 echo -e "  ${LCYAN}Services:${NC}    ${LWHITE}NetworkManager${NC}"
 echo -e "  ${LCYAN}Firmware:${NC}    ${LWHITE}${FIRMWARE_PACKAGES:-none}${NC}"
 echo -e "  ${LCYAN}Packages:${NC}    ${GRAY}${BASE_PKGS}${NC}"
+echo -e "  ${LCYAN}Log:${NC}         ${GRAY}${INSTALL_LOG}${NC}"
 echo ""
 echo -e "  ${BOLD}${LWHITE}Next steps:${NC}"
 echo -e "    ${GRAY}1.${NC} ${LYELLOW}reboot${NC}"
