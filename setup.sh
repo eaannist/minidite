@@ -54,6 +54,7 @@ show_logo() {
   ${AUTHORSTRING}                             ${GRAY}v${VERSION:-N/A}
 "
   echo -e "${NC}"
+  echo -e "  ${GREEN}#Setup${NC}"
 }
 
 # -----------------------------------------------------------------------------
@@ -68,6 +69,7 @@ CONFIG_FILES=(
   "home/.bashrc:$HOME/.bashrc:1"
   "home/.config/oh-my-posh/theme.omp.json:$CONFIG/oh-my-posh/theme.omp.json:0"
   "home/.config/micro/settings.json:$CONFIG/micro/settings.json:0"
+  "home/.config/micro/colorschemes/custom.micro:$CONFIG/micro/colorschemes/custom.micro:0"
   "home/.config/fastfetch/config.jsonc:$CONFIG/fastfetch/config.jsonc:0"
   "home/.config/fastfetch/minidite.txt:$CONFIG/fastfetch/minidite.txt:0"
   "home/minidite-version:$HOME/minidite-version:0"
@@ -76,20 +78,21 @@ CONFIG_FILES=(
 REQUIRED_DIRS=(
   "$CONFIG/oh-my-posh"
   "$CONFIG/micro"
+  "$CONFIG/micro/colorschemes"
   "$CONFIG/fastfetch"
   "$CONFIG/fzf"
   "$HOME/.local/bin"
   "$HOME/.cache/bash"
 )
 
-RECOMMENDED_PACKAGES=(micro btop zoxide fzf ripgrep eza unzip tree ttf-firacode-nerd fastfetch)
+RECOMMENDED_PACKAGES=(micro btop zoxide fzf ripgrep eza unzip tree ttf-firacode-nerd fastfetch git)
 
 # /etc/default/limine — @@CMDLINE@@ is replaced at runtime in Step 11
 LIMINE_DEFAULT_CONF=$(cat <<EOF
 TARGET_OS_NAME="Minidite"
 ESP_PATH="/boot"
 KERNEL_CMDLINE[default]="@@CMDLINE@@"
-FIND_BOOTLOADERS=yes
+FIND_BOOTLOADERS=no
 ENABLE_LIMINE_FALLBACK=no
 ENABLE_UKI=yes
 CUSTOM_UKI_NAME="minidite"
@@ -105,7 +108,7 @@ EOF
 # limine-snapper-sync will inject /+Minidite, //linux, //Snapshots
 LIMINE_LIMINE_CONF=$(cat <<EOF
 ### https://github.com/limine-bootloader/limine/blob/trunk/CONFIG.md
-timeout: 5
+timeout: 3
 default_entry: 2
 interface_branding: Minidite v${VERSION}
 interface_branding_color: 6
@@ -130,17 +133,17 @@ ALLOW_USERS=""
 ALLOW_GROUPS=""
 SYNC_ACL="no"
 TIMELINE_CREATE="yes"
-TIMELINE_CREATE_AT_START="yes"
+TIMELINE_CREATE_AT_START="no"
 TIMELINE_CLEANUP="yes"
-TIMELINE_MIN_AGE="1800"
+TIMELINE_MIN_AGE="86400"
 TIMELINE_LIMIT_HOURLY="0"
 TIMELINE_LIMIT_DAILY="5"
 TIMELINE_LIMIT_WEEKLY="0"
 TIMELINE_LIMIT_MONTHLY="0"
 TIMELINE_LIMIT_YEARLY="0"
 NUMBER_CLEANUP="yes"
-NUMBER_LIMIT="5"
-NUMBER_LIMIT_IMPORTANT="5"
+NUMBER_LIMIT="3"
+NUMBER_LIMIT_IMPORTANT="3"
 NUMBER_MIN_AGE="0"
 EMPTY_PRE_POST_CLEANUP="yes"
 EMPTY_PRE_POST_MIN_AGE="1800"
@@ -214,9 +217,8 @@ show_summary() {
     log_ok "Setup complete."
     echo ""
     echo -e "  ${BOLD}${LWHITE}Next:${NC}"
-    echo -e "  ${LYELLOW}source ~/.bashrc${NC} or ${LYELLOW}exec bash${NC}"
-    echo -e "  Set terminal font to a ${BOLD}Nerd Font${NC} for icons."
-    echo -e "  Type ${LYELLOW}show-help${NC} for command reference."
+    echo -e "  Run command ${YELLOW}exec bash${NC} to load the new configuration."
+    echo -e "  Set terminal font to a ${RED}${BOLD}Nerd Font${NC} for icons."
     echo ""
   fi
   echo -e "  ${GRAY}Log: ${SETUP_LOG}${NC}"
@@ -225,6 +227,7 @@ show_summary() {
 declare -a SUMMARY_DONE=() SUMMARY_WARN=() SUMMARY_SKIP=()
 SHOW_SUMMARY=1
 trap show_summary EXIT
+
 
 # -----------------------------------------------------------------------------
 # Prerequisites
@@ -585,6 +588,7 @@ if [[ "$INST_OMP" == "yes" ]]; then
   else
     log_warn "Install failed"; s_warn "Oh My Posh install failed"
   fi
+  rm -rf "$HOME/.cache/oh-my-posh"
 else
   log_info "Skipped"; s_skip "Oh My Posh"
 fi
@@ -684,7 +688,7 @@ echo ""
 # ---- Step 8/13: Podman ----
 log_info "Step 8/13: Podman"
 if [[ "$CHOICE_PODMAN" == "1" ]]; then
-  if sudo pacman -S --noconfirm --needed podman 2>/dev/null; then
+  if sudo pacman -S --noconfirm --needed podman podman-compose 2>/dev/null; then
     log_ok "Podman installed/updated"
     s_done "Podman: installed"
     podman_post_install
@@ -738,7 +742,7 @@ if [[ "$CONF_SNAPPER" == "yes" ]]; then
         [[ -f "$f" ]] && sudo mv "$f" "${f}.disabled" 2>/dev/null || true
       done
       (sudo crontab -l 2>/dev/null | grep -v 'snapper') 2>/dev/null | sudo crontab - 2>/dev/null || true
-      log_ok "Snapper configured (timeline: 5 daily, number: 5 manual)"
+      log_ok "Snapper configured (timeline: 5 daily, number: 3 manual)"
       s_done "Snapper: timeline + number cleanup OK"
     else
       sudo mkdir -p /.snapshots
@@ -860,10 +864,6 @@ if [[ "$INST_LIMINE_MENU" == "yes" ]]; then
     sudo systemctl daemon-reload
     log_ok "limine-snapper-sync hooked to snapper-cleanup.service"
 
-    # Legacy cleanup: remove old script/cron entries from previous versions
-    sudo rm -f /usr/local/bin/limine-snapper-menu.sh 2>/dev/null || true
-    (sudo crontab -l 2>/dev/null | grep -v 'limine-snapper-menu') | sudo crontab - 2>/dev/null || true
-
     s_done "Limine snapshot menu: limine-snapper-sync"
 
   else
@@ -900,5 +900,6 @@ sudo systemctl enable fstrim.timer 2>/dev/null && log_ok "fstrim.timer enabled" 
 pacman -Q pacman-contrib &>/dev/null && sudo systemctl enable paccache.timer 2>/dev/null && log_ok "paccache.timer enabled" || true
 s_done "Cleanup: cache cleared, timers enabled"
 echo ""
+
 
 # Summary shown by trap on EXIT

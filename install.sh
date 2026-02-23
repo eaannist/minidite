@@ -51,6 +51,7 @@ show_logo() {
   ${AUTHORSTRING}                             ${GRAY}v${VERSION:-N/A}
 "
   echo -e "${NC}"
+  echo -e "  ${GREEN}#Install${NC}"
 }
 
 # -----------------------------------------------------------------------------
@@ -160,14 +161,14 @@ echo ""
 # ---- Step 2: System identity ----
 log_info "Step 2/6: Hostname and user"
 echo ""
-log_ask "Hostname (default: arch): "
+log_ask "Hostname (default: minidite): "
 read -r HOSTNAME </dev/tty
-HOSTNAME=$(echo "${HOSTNAME:-arch}" | tr -d ' \t')
+HOSTNAME=$(echo "${HOSTNAME:-minidite}" | tr -d ' \t')
 until valid_host "$HOSTNAME"; do log_err "Invalid hostname"; log_ask "Hostname: "; read -r HOSTNAME </dev/tty; HOSTNAME=$(echo "$HOSTNAME" | tr -d ' \t'); done
 
-log_ask "Username (default: arch): "
+log_ask "Username (default: admin): "
 read -r USER </dev/tty
-USER=$(echo "${USER:-arch}" | tr -d ' \t')
+USER=$(echo "${USER:-admin}" | tr -d ' \t')
 until valid_user "$USER"; do log_err "Invalid username (3-32 chars, a-z _ -)"; log_ask "Username: "; read -r USER </dev/tty; USER=$(echo "$USER" | tr -d ' \t'); done
 
 while true; do
@@ -225,11 +226,10 @@ echo ""
 
 # ---- Step 5: Firmware ----
 log_info "Step 5/6: Firmware"
-log_info "1) Full (linux-firmware, ~700MB)  2) Auto (detect from this machine)  3) None (e.g. VM)"
+log_info "1) Auto (detect from this machine)  2) Full (linux-firmware, ~700MB) 3) None (e.g. VM)"
 fw=$(read_choice "Choice (1-3): " "1" "2" "3")
 case "$fw" in
-  1) FIRMWARE_PACKAGES="linux-firmware" ;;
-  2)
+  1)
     FIRMWARE_PACKAGES=$(detect_firmware_packages)
     if [[ -z "$FIRMWARE_PACKAGES" ]]; then
       log_warn "No PCI devices matched; using full firmware"
@@ -238,6 +238,7 @@ case "$fw" in
       log_info "Auto-detected: ${FIRMWARE_PACKAGES}"
     fi
     ;;
+  2) FIRMWARE_PACKAGES="linux-firmware" ;;
   3) FIRMWARE_PACKAGES="" ;;
 esac
 echo ""
@@ -392,9 +393,20 @@ cp /usr/share/limine/BOOTX64.EFI /boot/EFI/BOOT/BOOTX64.EFI || fail "Copy Limine
 
 # limine.conf requires at least one entry; "config file contains non valid entries" if no entries
 cat > /boot/limine.conf <<LIMINE
-timeout: 5
-interface_branding: Minidite
+timeout: 3
+default_entry: 2
+interface_branding: Minidite v${VERSION}
+interface_branding_color: 6
+interface_help_color: 6
 hash_mismatch_panic: no
+
+term_background: 000000
+backdrop: 000000
+term_foreground: f0e0a0
+term_foreground_bright: f8ecb8
+term_background_bright: 141410
+term_palette: 0c0c0c;e06060;70c870;f0e0a0;5080c0;a070c0;56c8d8;a8a898
+term_palette_bright: 2a2a28;f08080;90e890;f8ecb8;70a0e0;c090e0;70e8f0;d0d0c0
 
 /Minidite
   protocol: linux

@@ -46,10 +46,9 @@ show_logo() {
 # -----------------------------------------------------------------------------
 HISTFILE="${HOME}/.cache/bash/history"
 HISTSIZE=10000
-HISTFILESIZE=10000
+HISTFILESIZE=20000
 HISTCONTROL=ignoredups:ignorespace
-shopt -s histappend
-shopt -s checkwinsize
+shopt -s histappend checkwinsize globstar cdspell
 
 # -----------------------------------------------------------------------------
 # Environment
@@ -87,19 +86,17 @@ command -v zoxide &>/dev/null && eval "$(zoxide init bash)"
 # -----------------------------------------------------------------------------
 # Listing (eza)
 # -----------------------------------------------------------------------------
-alias ls='eza --icons=always --group-directories-first'
 alias ll='eza -lh --icons=always --group-directories-first'
 alias la='eza -lah --icons=always --group-directories-first'
+alias ls='eza --icons=always --group-directories-first'
+alias lsa='eza -a --icons=always --group-directories-first'
 alias lt='eza --tree --icons=always --group-directories-first'
-alias l='eza -1 --icons=always --group-directories-first'
-alias la0='eza -lah --no-icons --group-directories-first'
+alias lta='eza --tree -a --icons=always --group-directories-first'
 
 # -----------------------------------------------------------------------------
 # Core utils (human-readable, color)
 # -----------------------------------------------------------------------------
 alias grep='grep --color=auto'
-alias fgrep='fgrep --color=auto'
-alias egrep='egrep --color=auto'
 alias df='df -h'
 alias du='du -h'
 alias free='free -h'
@@ -258,6 +255,18 @@ snap-rollback() {
   echo "Rollback done. Old root saved as @.rollback-${ts}"
   echo "Reboot now:  sudo reboot"
 }
+# check if booted from snapshot - if truereturns true - else is false
+snap-check() {
+  grep -q 'subvol=.*snapshots' /proc/cmdline 2>/dev/null
+}
+snap-restore() {
+  if ! snap-check; then
+    echo -e "${RED}ERROR${NC} You are not booted from a snapshot. Boot from the Limine menu to restore the system."
+    return 1
+  fi
+  sudo limine-snapper-restore  # O conferma notifica
+  echo -e "${LGREEN}Restore completed.${NC} Reboot now: ${LYELLOW}sudo reboot${NC}"
+}
 
 # -----------------------------------------------------------------------------
 # Help: list all aliases and functions with descriptions
@@ -265,36 +274,36 @@ snap-rollback() {
 show-help() {
   echo -e "\n${BOLD}${LCYAN}=== Command Reference ===${NC}\n"
   echo -e "${BOLD}${LCYAN}Listing (eza)${NC}"
-  echo -e "  ${LYELLOW}ls${NC}     list (icons, dirs first)"
-  echo -e "  ${LYELLOW}ll${NC}     list long"
-  echo -e "  ${LYELLOW}la${NC}     list all long"
-  echo -e "  ${LYELLOW}lt${NC}     list tree"
-  echo -e "  ${LYELLOW}l${NC}      list one column"
-  echo -e "  ${LYELLOW}la0${NC}    list all long, no icons"
+  echo -e "  ${LYELLOW}ll${NC}   list"
+  echo -e "  ${LYELLOW}la${NC}   list all"
+  echo -e "  ${LYELLOW}ls${NC}   grid view list"
+  echo -e "  ${LYELLOW}lsa${NC}   grid view list all"
+  echo -e "  ${LYELLOW}lt${NC}   tree view list"
+  echo -e "  ${LYELLOW}lta${NC}   tree view list all"
   echo ""
   echo -e "${BOLD}${LCYAN}Core utils${NC}"
-  echo -e "  ${LYELLOW}grep, fgrep, egrep${NC}   grep with color"
-  echo -e "  ${LYELLOW}df, du, free${NC}         human-readable sizes"
+  echo -e "  ${LYELLOW}grep${NC}   grep with color"
+  echo -e "  ${LYELLOW}df, du, free${NC}   disk, directory, free space"
   echo ""
   echo -e "${BOLD}${LCYAN}Navigation${NC}"
-  echo -e "  ${LYELLOW}b, bb, bbb${NC}    cd .., ../.., ../../.."
-  echo -e "  ${LYELLOW}mkcd <dir>${NC}    create dir and cd into it"
+  echo -e "  ${LYELLOW}b, bb, bbb${NC}   cd .., ../.., ../../.."
+  echo -e "  ${LYELLOW}mkcd <dir>${NC}   create dir and cd into it"
   echo ""
   echo -e "${BOLD}${LCYAN}System${NC}"
-  echo -e "  ${LYELLOW}sudo${NC}    (trailing space: expands aliases)"
-  echo -e "  ${LYELLOW}root${NC}    sudo su"
-  echo -e "  ${LYELLOW}reboot, poweroff, shutdown${NC}  with sudo"
+  echo -e "  ${LYELLOW}sudo${NC}   (trailing space: expands aliases)"
+  echo -e "  ${LYELLOW}root${NC}   sudo su"
+  echo -e "  ${LYELLOW}reboot, poweroff, shutdown${NC}   with sudo"
   echo ""
   echo -e "${BOLD}${LCYAN}Network${NC}"
-  echo -e "  ${LYELLOW}ip, ipa, ipr${NC}  ip with color, addr, route"
-  echo -e "  ${LYELLOW}ping${NC}    ping -c 4"
+  echo -e "  ${LYELLOW}ip, ipa, ipr${NC}   ip with color, addr, route"
+  echo -e "  ${LYELLOW}ping${NC}   ping -c 4"
   echo -e "  ${LYELLOW}ports${NC}   listening ports (ss -tulpn)"
-  echo -e "  ${LYELLOW}ipp${NC}     public IP"
+  echo -e "  ${LYELLOW}ipp${NC}   public IP"
   echo ""
   echo -e "${BOLD}${LCYAN}Fzf${NC}"
-  echo -e "  ${LYELLOW}f${NC}      fzf"
-  echo -e "  ${LYELLOW}cdf${NC}    cd into dir (fuzzy pick)"
-  echo -e "  ${LYELLOW}ff${NC}     fuzzy find file (e.g. micro \$(ff))"
+  echo -e "  ${LYELLOW}f${NC}   fzf"
+  echo -e "  ${LYELLOW}cdf${NC}   cd into dir (fuzzy pick)"
+  echo -e "  ${LYELLOW}ff${NC}   fuzzy find file (e.g. micro \$(ff))"
   echo -e "  ${GRAY}Bindings: Ctrl+R history, Ctrl+T files, Alt+C cd${NC}"
   echo ""
   echo -e "${BOLD}${LCYAN}Files and archives${NC}"
@@ -313,6 +322,7 @@ show-help() {
   echo -e "  ${LYELLOW}snap-diff <num>${NC}   show changes between snapshot and current"
   echo -e "  ${LYELLOW}snap-rm <num>${NC}     delete a snapshot"
   echo -e "  ${LYELLOW}snap-rollback <num>${NC} rollback root to snapshot (requires reboot)"
+  echo -e "  ${LYELLOW}snap-restore${NC}       (when booted from snapshot) make it the default system, then reboot"
   echo ""
   echo -e "${BOLD}${LCYAN}SSH${NC}"
   echo -e "  ${LYELLOW}ssh-lockdown${NC}  disable password auth (key-only, interactive)"
@@ -331,5 +341,10 @@ show-help() {
 [[ -n "$PS1" ]]
 clear
 show_logo
-echo -e "${DIM}  type ${YELLOW}show-help${DIM} for commands reference\n${NC}"
+if snap-check; then
+  echo -e "  ${LYELLOW}WARNING${NC} You are booted from a readonly snapshot."
+  echo -e "  ${NC}To ${LRED}restore${NC} the system to this state, run ${LYELLOW}snap-restore${NC}"
+else
+  echo -e "${NC}     type ${YELLOW}show-help${NC} for commands reference\n${NC}"
+fi
 [[ -f "${HOME}/.bashrc.local" ]] && source "${HOME}/.bashrc.local"

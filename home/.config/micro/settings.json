@@ -1,6 +1,17 @@
 {
-    "mouse": true,
-    "keymenu": true,
+    "*.js": {
+        "tabsize": 2
+    },
+    "*.py": {
+        "tabsize": 4
+    },
+    "*.ts": {
+        "tabsize": 2
+    },
     "paste": true,
-    "clipboard": "terminal"
+    "softwrap": true,
+    "wordwrap": true,
+    "autosu": true,
+    "clipboard": "terminal",
+    "colorscheme": "custom"
 }
