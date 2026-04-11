@@ -132,7 +132,6 @@ alias ports='ss -tulpn'
 # Fzf shortcuts
 # -----------------------------------------------------------------------------
 alias f='fzf'
-cdf() { local d; d=$(find "${1:-.}" -type d -not -path '*/\.*' 2>/dev/null | fzf +m --height 40%) && cd "$d"; }
 ff() { find "${1:-.}" -type f -not -path '*/\.*' 2>/dev/null | fzf +m --height 40%; }
 
 # -----------------------------------------------------------------------------
@@ -176,7 +175,20 @@ extract() {
 # -----------------------------------------------------------------------------
 # Functions: network, system, config
 # -----------------------------------------------------------------------------
-ipp() { curl -s ifconfig.me || curl -s icanhazip.com || curl -s ipinfo.io/ip; }
+ipp() {
+  local ip="" url
+  for url in https://ifconfig.me https://icanhazip.com https://ipinfo.io/ip; do
+    ip=$(curl -fsS --max-time 10 "$url" 2>/dev/null | tr -d '[:space:]')
+    [[ -n "$ip" ]] && break
+  done
+  if [[ -n "$ip" ]]; then
+    echo -e "\n${BOLD}${LCYAN}=== Public IP ===${NC}"
+    echo -e "  ${GRAY}address${NC}  ${LYELLOW}${ip}${NC}\n"
+  else
+    echo -e "${LRED}Could not fetch public IP.${NC}" >&2
+    return 1
+  fi
+}
 sysinfo() {
   if command -v fastfetch &>/dev/null; then
     fastfetch --config "${HOME}/.config/fastfetch/config.jsonc" 2>/dev/null || fastfetch
@@ -288,6 +300,7 @@ show-help() {
   echo -e "${BOLD}${LCYAN}Navigation${NC}"
   echo -e "  ${LYELLOW}b, bb, bbb${NC}   cd .., ../.., ../../.."
   echo -e "  ${LYELLOW}mkcd <dir>${NC}   create dir and cd into it"
+  echo -e "  ${LYELLOW}z${NC}, ${LYELLOW}zi${NC}   zoxide jump, interactive pick"
   echo ""
   echo -e "${BOLD}${LCYAN}System${NC}"
   echo -e "  ${LYELLOW}sudo${NC}   (trailing space: expands aliases)"
@@ -296,13 +309,12 @@ show-help() {
   echo ""
   echo -e "${BOLD}${LCYAN}Network${NC}"
   echo -e "  ${LYELLOW}ip, ipa, ipr${NC}   ip with color, addr, route"
+  echo -e "  ${LYELLOW}ipp${NC}   public IP"
   echo -e "  ${LYELLOW}ping${NC}   ping -c 4"
   echo -e "  ${LYELLOW}ports${NC}   listening ports (ss -tulpn)"
-  echo -e "  ${LYELLOW}ipp${NC}   public IP"
   echo ""
   echo -e "${BOLD}${LCYAN}Fzf${NC}"
   echo -e "  ${LYELLOW}f${NC}   fzf"
-  echo -e "  ${LYELLOW}cdf${NC}   cd into dir (fuzzy pick)"
   echo -e "  ${LYELLOW}ff${NC}   fuzzy find file (e.g. micro \$(ff))"
   echo -e "  ${GRAY}Bindings: Ctrl+R history, Ctrl+T files, Alt+C cd${NC}"
   echo ""
@@ -345,6 +357,10 @@ if snap-check; then
   echo -e "  ${LYELLOW}WARNING${NC} You are booted from a readonly snapshot."
   echo -e "  ${NC}To ${LRED}restore${NC} the system to this state, run ${LYELLOW}snap-restore${NC}"
 else
-  echo -e "${NC}     type ${YELLOW}show-help${NC} for commands reference\n${NC}"
+  if [[ -n "${TMUX:-}" ]]; then
+    echo -e "${NC}  press ${YELLOW}prefix${NC}(Ctrl+a) + ${YELLOW}h${NC} for keybindings"
+  else
+    echo -e "${NC}     type ${YELLOW}show-help${NC} for commands reference\n${NC}"
+  fi
 fi
 [[ -f "${HOME}/.bashrc.local" ]] && source "${HOME}/.bashrc.local"

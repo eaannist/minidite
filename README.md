@@ -45,7 +45,7 @@ Run once as **root** from an Arch Linux live ISO. It performs a minimal installa
 **Packages installed (pacstrap):**
 
 | Package | Purpose |
-|---------|--------|
+|---------|---------|
 | base | Core system |
 | linux | Kernel |
 | linux-firmware (or split) | Optional: full, auto-detect from lspci, or none |
@@ -78,10 +78,10 @@ Run as **normal user** after first login (after install.sh and reboot). Optional
 11. **Oh My Posh (optional):** install to `~/.local/bin`.
 12. **Cleanup:** pacman cache cleared, orphans removed, fstrim.timer, paccache.timer.
 
-**Packages installed (pacman):**
+**Packages:**
 
 | Package | Purpose |
-|---------|--------|
+|---------|---------|
 | micro | Text editor |
 | btop | System monitor |
 | zoxide | Smart cd |
@@ -92,52 +92,18 @@ Run as **normal user** after first login (after install.sh and reboot). Optional
 | tree | Directory tree |
 | ttf-firacode-nerd | Nerd Font for prompt and eza |
 | fastfetch | System info with custom logo |
+| tmux | Terminal multiplexer |
 
-**Limine snapshot menu packages (OPR first, AUR fallback):**
+**Limine snapshot menu packages:**
 
 | Package | Source | Purpose |
-|---------|--------|--------|
+|---------|--------|---------|
 | limine-snapper-sync | OPR / AUR | Sync Snapper snapshots to Limine boot menu |
 | limine-mkinitcpio-hook | OPR / AUR | Run limine-update on kernel updates |
 | mkinitcpio-btrfs | OPR / AUR | btrfs-overlayfs hook for booting into snapshots |
 | yay | AUR | AUR helper (installed only if OPR fails) |
 
 ---
-
-## Commands, aliases, functions (bash)
-
-| Category | Item | Description |
-|----------|------|-------------|
-| **Profile** | profile-edit | Edit .bashrc |
-| | theme-edit | Edit Oh My Posh theme |
-| | reload | Reload bash |
-| | show-help | Full command reference |
-| **Dirs** | b, bb, bbb | Up 1, 2, 3 directories |
-| | mkcd \<dir\> | Create dir and cd into it |
-| | ls, ll, la, lt, l | eza list (icons; la0 = no icons) |
-| **Files** | nf \<file\> | Create file and open in editor (micro) |
-| | head \<file\> [n] | First n lines (default 10) |
-| | tail \<file\> [n] | Last n lines; tail -f supported |
-| | extract \<archive\> | Extract .tar.gz, .zip, .tar.xz, etc. |
-| **FZF** | f | Run fzf |
-| | cdf | Cd into directory (fuzzy pick) |
-| | ff | Fuzzy find file (e.g. micro \$(ff)) |
-| | (key bindings) | Ctrl+R history, Ctrl+T files, Alt+C cd |
-| **System** | sysinfo | fastfetch with custom logo |
-| | reboot, poweroff, shutdown | sudo wrapper |
-| **Snapshot** | snap [desc] | Create manual snapshot; update Limine menu |
-| | snap-ls | List snapshots |
-| | snap-diff \<num\> | Diff snapshot vs current |
-| | snap-rm \<num\> | Delete snapshot |
-| | snap-rollback \<num\> | Rollback root to snapshot (reboot required) |
-| **SSH** | ssh-lockdown | Disable password auth (key-only) |
-| | ssh-unlock | Re-enable password auth |
-| **Lazydocker** | ld-podman | Set DOCKER_HOST to Podman socket |
-| | ld-reset | Unset DOCKER_HOST (use Docker) |
-| **Network** | ip, ipa, ipr | ip with colors |
-| | ping | 4 packets |
-| | ports | Listening ports (ss -tulpn) |
-| | ipp | Public IP address |
 
 ## Links
 

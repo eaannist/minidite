@@ -73,6 +73,7 @@ CONFIG_FILES=(
   "home/.config/fastfetch/config.jsonc:$CONFIG/fastfetch/config.jsonc:0"
   "home/.config/fastfetch/minidite.txt:$CONFIG/fastfetch/minidite.txt:0"
   "home/minidite-version:$HOME/minidite-version:0"
+  "home/.config/tmux/tmux.conf:$CONFIG/tmux/tmux.conf:0"
 )
 
 REQUIRED_DIRS=(
@@ -80,12 +81,17 @@ REQUIRED_DIRS=(
   "$CONFIG/micro"
   "$CONFIG/micro/colorschemes"
   "$CONFIG/fastfetch"
+  "$CONFIG/tmux"
   "$CONFIG/fzf"
   "$HOME/.local/bin"
   "$HOME/.cache/bash"
 )
 
-RECOMMENDED_PACKAGES=(micro btop zoxide fzf ripgrep eza unzip tree ttf-firacode-nerd fastfetch git)
+RECOMMENDED_PACKAGES=(micro btop zoxide fzf ripgrep eza unzip tree tmux ttf-firacode-nerd fastfetch git)
+
+# Persisted after a successful run; presence switches to update mode
+SETUP_STATE_FILE="${HOME}/minidite-setup-data"
+SETUP_STATE_VERSION=1
 
 # /etc/default/limine — @@CMDLINE@@ is replaced at runtime in Step 11
 LIMINE_DEFAULT_CONF=$(cat <<EOF
@@ -266,6 +272,109 @@ download_configs() {
   return 0
 }
 
+# Config tags: bashrc, version, omp, micro, fastfetch, tmux (lines: repo_path:dest:required)
+get_config_tag_entries() {
+  local tag="$1"
+  case "$tag" in
+    bashrc)    echo "home/.bashrc:$HOME/.bashrc:1" ;;
+    version)   echo "home/minidite-version:$HOME/minidite-version:0" ;;
+    omp)       echo "home/.config/oh-my-posh/theme.omp.json:$CONFIG/oh-my-posh/theme.omp.json:0" ;;
+    micro)
+      echo "home/.config/micro/settings.json:$CONFIG/micro/settings.json:0"
+      echo "home/.config/micro/colorschemes/custom.micro:$CONFIG/micro/colorschemes/custom.micro:0"
+      ;;
+    fastfetch)
+      echo "home/.config/fastfetch/config.jsonc:$CONFIG/fastfetch/config.jsonc:0"
+      echo "home/.config/fastfetch/minidite.txt:$CONFIG/fastfetch/minidite.txt:0"
+      ;;
+    tmux)
+      echo "home/.config/tmux/tmux.conf:$CONFIG/tmux/tmux.conf:0"
+      echo "home/.config/tmux/tmux-help.sh:$CONFIG/tmux/tmux-help.sh:0"
+      ;;
+    *)         return 1 ;;
+  esac
+}
+
+# Map a pacman package name to extra config tags (beyond bashrc/version)
+pkg_to_config_tags() {
+  case "$1" in
+    micro)     echo micro ;;
+    fastfetch) echo fastfetch ;;
+    tmux)      echo tmux ;;
+    *)         ;;
+  esac
+}
+
+download_configs_by_tags() {
+  local tag entry src dest required failed=0
+  for tag in "$@"; do
+    while IFS= read -r entry; do
+      [[ -z "$entry" ]] && continue
+      IFS=: read -r src dest required <<< "$entry"
+      if curl -fsSL "${REPO_URL}/${src}" -o "$dest" 2>/dev/null; then
+        :
+      else
+        [[ "$required" -eq 1 ]] && { log_err "Failed to download required file: $src"; failed=1; }
+        log_warn "Failed to download optional file: $src"
+      fi
+    done < <(get_config_tag_entries "$tag" 2>/dev/null || true)
+  done
+  [[ -f "$HOME/minidite-version" ]] && sudo cp "$HOME/minidite-version" /etc/minidite-version 2>/dev/null || true
+  [[ $failed -eq 1 ]] && return 1
+  log_ok "Config files downloaded"
+  return 0
+}
+
+save_setup_state() {
+  umask 077
+  {
+    echo "MINIDITE_SETUP_VERSION=${SETUP_STATE_VERSION}"
+    echo "FIRST_RUN_DATE=${FIRST_RUN_DATE:-$(date -Iseconds)}"
+    echo "LAST_RUN_DATE=$(date -Iseconds)"
+  } > "$SETUP_STATE_FILE" 2>/dev/null || true
+}
+
+load_first_run_date() {
+  FIRST_RUN_DATE=""
+  [[ -f "$SETUP_STATE_FILE" ]] || return 0
+  # shellcheck source=/dev/null
+  source "$SETUP_STATE_FILE" 2>/dev/null || true
+}
+
+# Parse space-separated indices (1-based) into package names; validates against RECOMMENDED_PACKAGES
+parse_pkg_indices() {
+  local line="$1" i name
+  SELECTED_PKGS=()
+  for i in $line; do
+    [[ "$i" =~ ^[0-9]+$ ]] || continue
+    (( i >= 1 && i <= ${#RECOMMENDED_PACKAGES[@]} )) || continue
+    name="${RECOMMENDED_PACKAGES[$((i - 1))]}"
+    SELECTED_PKGS+=("$name")
+  done
+}
+
+# Installed subset of RECOMMENDED_PACKAGES (names)
+list_installed_recommended() {
+  local p out=()
+  for p in "${RECOMMENDED_PACKAGES[@]}"; do
+    pacman -Q "$p" &>/dev/null && out+=("$p")
+  done
+  echo "${out[@]}"
+}
+
+# Deduplicate config tag names into global CONFIG_TAGS
+dedupe_tags() {
+  local t
+  declare -A seen=()
+  CONFIG_TAGS=()
+  for t in "$@"; do
+    [[ -z "$t" ]] && continue
+    [[ ${seen[$t]+x} ]] && continue
+    seen[$t]=1
+    CONFIG_TAGS+=("$t")
+  done
+}
+
 configure_sshd_minidite() {
   local cfg="/etc/ssh/sshd_config"
   local drop="/etc/ssh/sshd_config.d/90-minidite.conf"
@@ -349,40 +458,223 @@ has_snapshots_mount=0; [[ -d /.snapshots ]] && has_snapshots_mount=1
 snapper_configured=0
 snapper list-configs 2>/dev/null | grep -q "root" && snapper_configured=1
 
-# ---- Decisions: packages ----
-log_info "Packages (${installed_count}/${total} installed, ${missing_count} missing)"
-[[ $missing_count -gt 0 ]] && echo -e "  ${DIM}Missing: ${missing_pkgs[*]}${NC}"
-if [[ $installed_count -eq 0 ]]; then
-  echo "  1) Install missing   4) Skip"
-  CHOICE_PKGS=$(read_choice "Choice (1 or 4): " "1" "4")
-elif [[ $missing_count -gt 0 ]]; then
-  echo "  1) Install missing   2) Update installed   3) Update + install missing   4) Skip"
-  CHOICE_PKGS=$(read_choice "Choice (1-4): " "1" "2" "3" "4")
+UPDATE_MODE=0
+[[ -f "$SETUP_STATE_FILE" ]] && UPDATE_MODE=1
+load_first_run_date
+
+SELECTED_PKGS=()
+CONFIG_TAGS=()
+PKG_PHASE_SKIP=0
+CONFIG_PHASE_SKIP=0
+INST_OMP="no"
+
+if [[ $UPDATE_MODE -eq 0 ]]; then
+  log_info "First run: recommended CLI packages (${installed_count}/${total} already installed)"
+  echo -e "  ${DIM}These tools are optional extras (micro, fzf, tmux, fastfetch, git, ...).${NC}"
+  echo ""
+  echo "  1) Install all recommended packages"
+  echo "  2) Choose which packages to install (by number)"
+  echo "  3) Skip (do not install any of these packages now)"
+  PKG_FIRST=$(read_choice "Choice (1-3): " "1" "2" "3")
+  echo ""
+  case "$PKG_FIRST" in
+    1)
+      SELECTED_PKGS=("${RECOMMENDED_PACKAGES[@]}")
+      log_ok "All ${#SELECTED_PKGS[@]} recommended packages will be installed."
+      ;;
+    2)
+      echo "Recommended packages (install by number, space-separated):"
+      for _pkg_idx in "${!RECOMMENDED_PACKAGES[@]}"; do
+        printf "  %2d) %s\n" "$((_pkg_idx + 1))" "${RECOMMENDED_PACKAGES[_pkg_idx]}"
+      done
+      log_ask "Enter numbers (e.g. 1 3 7) or \"all\": " >&2
+      read -r pkg_line </dev/tty
+      pkg_line=$(echo "$pkg_line" | tr '[:upper:]' '[:lower:]')
+      if [[ "$pkg_line" == "all" ]]; then
+        SELECTED_PKGS=("${RECOMMENDED_PACKAGES[@]}")
+      else
+        parse_pkg_indices "$pkg_line"
+      fi
+      [[ ${#SELECTED_PKGS[@]} -eq 0 ]] && { log_warn "No packages selected."; PKG_PHASE_SKIP=1; }
+      ;;
+    3)
+      PKG_PHASE_SKIP=1
+      log_info "Skipped: no recommended packages will be installed in this run."
+      ;;
+  esac
+  echo ""
+
+  if [[ $PKG_PHASE_SKIP -eq 1 ]]; then
+    CONFIG_PHASE_SKIP=1
+    log_info "Config files: skipped (no packages selected; run setup again to add packages and configs)."
+  else
+    log_info "Minidite config files from the repository (shell, editors, themes)"
+    echo "  1) Install configs for everything you selected above (bash, matching tools, etc.)"
+    echo "  2) Choose exactly which config bundles to install"
+    echo "  3) Skip config download (packages only)"
+    CFG_FIRST=$(read_choice "Choice (1-3): " "1" "2" "3")
+    echo ""
+    case "$CFG_FIRST" in
+      1)
+        _cfg_acc=(bashrc version)
+        for _cfg_p in "${SELECTED_PKGS[@]}"; do
+          while IFS= read -r _cfg_t; do [[ -n "$_cfg_t" ]] && _cfg_acc+=("$_cfg_t"); done < <(pkg_to_config_tags "$_cfg_p")
+        done
+        dedupe_tags "${_cfg_acc[@]}"
+        log_ok "Will install config bundles: ${CONFIG_TAGS[*]}"
+        ;;
+      2)
+        echo "Available config bundles:"
+        echo "  1) bashrc + minidite shell integration (recommended)"
+        echo "  2) minidite-version (shown in shell / fastfetch)"
+        echo "  3) Oh My Posh theme (needs Oh My Posh binary; installed in a later step)"
+        echo "  4) Micro editor (settings + colors)"
+        echo "  5) Fastfetch"
+        echo "  6) Tmux"
+        log_ask "Enter numbers (e.g. 1 4 6): " >&2
+        read -r cfg_line </dev/tty
+        _cfg_pick=()
+        for _cfg_n in $cfg_line; do
+          case "$_cfg_n" in
+            1) _cfg_pick+=(bashrc) ;;
+            2) _cfg_pick+=(version) ;;
+            3) _cfg_pick+=(omp) ;;
+            4) _cfg_pick+=(micro) ;;
+            5) _cfg_pick+=(fastfetch) ;;
+            6) _cfg_pick+=(tmux) ;;
+          esac
+        done
+        dedupe_tags "${_cfg_pick[@]}"
+        [[ ${#CONFIG_TAGS[@]} -eq 0 ]] && { log_warn "No config bundles selected."; CONFIG_PHASE_SKIP=1; }
+        ;;
+      3)
+        CONFIG_PHASE_SKIP=1
+        log_info "Skipped: repository config files will not be downloaded."
+        ;;
+    esac
+  fi
+  echo ""
+
+  if [[ ${#CONFIG_TAGS[@]} -gt 0 ]] && printf '%s\n' "${CONFIG_TAGS[@]}" | grep -qx omp; then
+    INST_OMP="yes"
+  fi
 else
-  echo "  1) Update installed   2) Skip"
+  log_info "Update mode: state file found (${SETUP_STATE_FILE})"
+  [[ -n "${FIRST_RUN_DATE:-}" ]] && echo -e "  ${DIM}First setup: ${FIRST_RUN_DATE}${NC}"
+  echo ""
+
+  installed_recommended_list=()
+  read -r -a installed_recommended_list <<< "$(list_installed_recommended)"
+  ir_count=${#installed_recommended_list[@]}
+
+  log_info "Recommended packages (minidite): ${ir_count} installed from this list"
+  echo "  1) Update all installed recommended packages"
+  echo "  2) Choose which installed packages to update"
+  echo "  3) Skip (do not run pacman for this list)"
+  PKG_UPD=$(read_choice "Choice (1-3): " "1" "2" "3")
+  echo ""
+  SELECTED_PKGS=()
+  case "$PKG_UPD" in
+    1)
+      SELECTED_PKGS=("${installed_recommended_list[@]}")
+      [[ ${#SELECTED_PKGS[@]} -eq 0 ]] && { log_warn "None of the recommended packages are installed."; PKG_PHASE_SKIP=1; }
+      ;;
+    2)
+      if [[ $ir_count -eq 0 ]]; then
+        log_warn "No recommended packages installed. Skipping package update."
+        PKG_PHASE_SKIP=1
+      else
+        for _ir_idx in "${!installed_recommended_list[@]}"; do
+          printf "  %2d) %s\n" "$((_ir_idx + 1))" "${installed_recommended_list[_ir_idx]}"
+        done
+        log_ask "Enter numbers to update (e.g. 1 2) or \"all\": " >&2
+        read -r pkg_line2 </dev/tty
+        pkg_line2=$(echo "$pkg_line2" | tr '[:upper:]' '[:lower:]')
+        if [[ "$pkg_line2" == "all" ]]; then
+          SELECTED_PKGS=("${installed_recommended_list[@]}")
+        else
+          SELECTED_PKGS=()
+          for _ir_j in $pkg_line2; do
+            [[ "$_ir_j" =~ ^[0-9]+$ ]] || continue
+            ((_ir_j >= 1 && _ir_j <= ir_count)) || continue
+            _ir_name="${installed_recommended_list[$((_ir_j - 1))]}"
+            SELECTED_PKGS+=("$_ir_name")
+          done
+        fi
+        [[ ${#SELECTED_PKGS[@]} -eq 0 ]] && { log_warn "No packages selected."; PKG_PHASE_SKIP=1; }
+      fi
+      ;;
+    3)
+      PKG_PHASE_SKIP=1
+      log_info "Skipped: recommended packages will not be updated this run."
+      ;;
+  esac
+  echo ""
+
+  log_info "Refresh Minidite config files from the repository"
+  echo "  1) Refresh configs for all installed tools that have a Minidite bundle (bash, micro, ...)"
+  echo "  2) Choose which config bundles to refresh"
+  echo "  3) Skip (leave config files unchanged)"
+  CFG_UPD=$(read_choice "Choice (1-3): " "1" "2" "3")
+  echo ""
+  case "$CFG_UPD" in
+    1)
+      _upd_cfg_acc=(bashrc version)
+      read -r -a _inst <<< "$(list_installed_recommended)"
+      for _upd_p in "${_inst[@]}"; do
+        while IFS= read -r _upd_t; do [[ -n "$_upd_t" ]] && _upd_cfg_acc+=("$_upd_t"); done < <(pkg_to_config_tags "$_upd_p")
+      done
+      dedupe_tags "${_upd_cfg_acc[@]}"
+      ;;
+    2)
+      echo "Config bundles:"
+      echo "  1) bashrc + shell integration"
+      echo "  2) minidite-version"
+      echo "  3) Oh My Posh theme"
+      echo "  4) Micro"
+      echo "  5) Fastfetch"
+      echo "  6) Tmux"
+      log_ask "Enter numbers (e.g. 1 3): " >&2
+      read -r cfg_line3 </dev/tty
+      _upd_pick=()
+      for _upd_n in $cfg_line3; do
+        case "$_upd_n" in
+          1) _upd_pick+=(bashrc) ;;
+          2) _upd_pick+=(version) ;;
+          3) _upd_pick+=(omp) ;;
+          4) _upd_pick+=(micro) ;;
+          5) _upd_pick+=(fastfetch) ;;
+          6) _upd_pick+=(tmux) ;;
+        esac
+      done
+      dedupe_tags "${_upd_pick[@]}"
+      [[ ${#CONFIG_TAGS[@]} -eq 0 ]] && { log_warn "No bundles selected."; CONFIG_PHASE_SKIP=1; }
+      ;;
+    3)
+      CONFIG_PHASE_SKIP=1
+      log_info "Skipped: config files will not be refreshed."
+      ;;
+  esac
+  echo ""
+
+  if [[ ${#CONFIG_TAGS[@]} -gt 0 ]] && printf '%s\n' "${CONFIG_TAGS[@]}" | grep -qx omp; then
+    INST_OMP="yes"
+  fi
+fi
+
+# ---- Decisions: Oh My Posh (binary) — optional if not already set by omp config tag ---
+if [[ "$INST_OMP" != "yes" ]]; then
+  log_info "Oh My Posh (prompt theme binary)"
+  if [[ $omp_installed -eq 1 ]]; then
+    echo "  1) Update / reinstall   2) Skip"
+  else
+    echo "  1) Install   2) Skip"
+  fi
   c=$(read_choice "Choice (1-2): " "1" "2")
-  [[ "$c" == "1" ]] && CHOICE_PKGS="2" || CHOICE_PKGS="4"
-fi
-echo ""
-
-# ---- Decisions: config files ----
-log_info "Config files from repo"
-if [[ $config_already -eq 1 ]]; then
-  CONFIG_DO=$(read_yes_no "Configs already present. Overwrite? (yes/no): ")
+  [[ "$c" == "1" ]] && INST_OMP="yes" || INST_OMP="no"
 else
-  CONFIG_DO=$(read_yes_no "Download and install config files? (yes/no): ")
+  log_info "Oh My Posh: will install or update (required for the theme you selected)"
 fi
-echo ""
-
-# ---- Decisions: Oh My Posh ----
-log_info "Oh My Posh (prompt theme)"
-if [[ $omp_installed -eq 1 ]]; then
-  echo "  1) Update   2) Skip"
-else
-  echo "  1) Install   2) Skip"
-fi
-c=$(read_choice "Choice (1-2): " "1" "2")
-[[ "$c" == "1" ]] && INST_OMP="yes" || INST_OMP="no"
 echo ""
 
 # ---- Decisions: OpenSSH ----
@@ -545,33 +837,27 @@ echo ""
 
 # ---- Step 2/13: Recommended CLI packages ----
 log_info "Step 2/13: Recommended CLI packages"
-case "$CHOICE_PKGS" in
-  1)
-    [[ $missing_count -gt 0 ]] \
-      && sudo pacman -S --noconfirm --needed "${missing_pkgs[@]}" 2>/dev/null \
-      && { log_ok "Missing packages installed"; s_done "Packages: installed ${missing_pkgs[*]}"; } \
-      || { log_warn "Install failed or nothing to do"; s_warn "Packages: install failed"; }
-    ;;
-  2)
-    [[ $installed_count -gt 0 ]] \
-      && sudo pacman -S --noconfirm --needed "${installed_pkgs[@]}" 2>/dev/null \
-      && { log_ok "Packages updated"; s_done "Packages: updated"; } \
-      || { log_info "Nothing to update"; s_skip "Packages"; }
-    ;;
-  3)
-    [[ $installed_count -gt 0 ]] && sudo pacman -S --noconfirm --needed "${installed_pkgs[@]}" 2>/dev/null || true
-    [[ $missing_count  -gt 0 ]] && sudo pacman -S --noconfirm --needed "${missing_pkgs[@]}"  2>/dev/null || true
-    log_ok "Update and install done"; s_done "Packages: updated + installed"
-    ;;
-  4) log_info "Skipped"; s_skip "Packages" ;;
-esac
+if [[ $PKG_PHASE_SKIP -eq 0 && ${#SELECTED_PKGS[@]} -gt 0 ]]; then
+  if sudo pacman -S --noconfirm --needed "${SELECTED_PKGS[@]}" 2>/dev/null; then
+    log_ok "Pacman finished for selected packages"
+    s_done "Packages: ${SELECTED_PKGS[*]}"
+  else
+    log_warn "Pacman reported an error (some packages may be unavailable)"
+    s_warn "Packages: pacman step had issues"
+  fi
+else
+  log_info "Skipped"; s_skip "Recommended packages (pacman)"
+fi
 echo ""
 
 # ---- Step 3/13: Config files ----
 log_info "Step 3/13: Config files"
-if [[ "$CONFIG_DO" == "yes" ]]; then
-  download_configs && s_done "Config files downloaded" \
-    || { [[ $config_already -eq 1 ]] && s_warn "Config download partial" || exit 1; }
+if [[ $CONFIG_PHASE_SKIP -eq 0 && ${#CONFIG_TAGS[@]} -gt 0 ]]; then
+  if download_configs_by_tags "${CONFIG_TAGS[@]}"; then
+    s_done "Config files: ${CONFIG_TAGS[*]}"
+  else
+    [[ $config_already -eq 1 ]] && s_warn "Config download incomplete (required files missing?)" || exit 1
+  fi
 else
   log_info "Skipped"; s_skip "Config files"
 fi
@@ -580,11 +866,14 @@ echo ""
 # ---- Step 4/13: Oh My Posh ----
 log_info "Step 4/13: Oh My Posh"
 if [[ "$INST_OMP" == "yes" ]]; then
+  mkdir -p "$CONFIG/oh-my-posh"
   if curl -s https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/.local/bin" 2>/dev/null; then
-    log_ok "Installed/updated"; s_done "Oh My Posh installed"
-    mkdir -p "$CONFIG/oh-my-posh"
-    curl -fsSL "${REPO_URL}/home/.config/oh-my-posh/theme.omp.json" \
-      -o "$CONFIG/oh-my-posh/theme.omp.json" 2>/dev/null || true
+    log_ok "Oh My Posh binary installed/updated"
+    s_done "Oh My Posh binary"
+    if [[ ! -f "$CONFIG/oh-my-posh/theme.omp.json" ]]; then
+      curl -fsSL "${REPO_URL}/home/.config/oh-my-posh/theme.omp.json" \
+        -o "$CONFIG/oh-my-posh/theme.omp.json" 2>/dev/null || log_warn "Theme download failed (install config bundle \"Oh My Posh\" in a later run)"
+    fi
   else
     log_warn "Install failed"; s_warn "Oh My Posh install failed"
   fi
@@ -901,5 +1190,16 @@ pacman -Q pacman-contrib &>/dev/null && sudo systemctl enable paccache.timer 2>/
 s_done "Cleanup: cache cleared, timers enabled"
 echo ""
 
+save_setup_state
+log_ok "Setup state saved (${SETUP_STATE_FILE})"
+
+if [[ -t 0 ]] && [[ -t 1 ]]; then
+  echo ""
+  read -r -n1 -s -p "Press any key to reload your shell with bash (or Ctrl+C to keep this session)... " </dev/tty || true
+  echo ""
+  show_summary
+  trap - EXIT
+  exec bash -l
+fi
 
 # Summary shown by trap on EXIT
