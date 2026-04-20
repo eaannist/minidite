@@ -199,11 +199,32 @@ sysinfo() {
 profile-edit() { "${EDITOR}" "${HOME}/.bashrc"; }
 theme-edit() { "${EDITOR}" "${HOME}/.config/oh-my-posh/theme.omp.json"; }
 reload() { source "${HOME}/.bashrc"; }
+# Append one client pubkey to ~/.ssh/authorized_keys (interactive paste, or pass the line as args)
+ssh-add-client() {
+  local ak="$HOME/.ssh/authorized_keys"
+  mkdir -p "$HOME/.ssh"
+  chmod 700 "$HOME/.ssh"
+  local line="$*"
+  if [[ -z "$line" ]]; then
+    echo "Paste the client's public key (one line), then Enter:"
+    read -r line || return 1
+  fi
+  line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  [[ -z "$line" ]] && { echo "Empty line, nothing added." >&2; return 1; }
+  if [[ -f "$ak" ]] && grep -Fxq "$line" "$ak" 2>/dev/null; then
+    echo "This key is already in $ak"
+    return 0
+  fi
+  echo "$line" >> "$ak"
+  chmod 600 "$ak"
+  echo "Key appended to $ak"
+}
 ssh-lockdown() {
   local ak="$HOME/.ssh/authorized_keys"
   if [[ ! -f "$ak" ]] || [[ ! -s "$ak" ]]; then
     echo "No keys in $ak. Add your client key first:"
-    echo "  From your PC: ssh-copy-id $(whoami)@$(hostname -I 2>/dev/null | awk '{print $1}')"
+    echo "  On this server:  ssh-add-client"
+    echo "  From your PC:     ssh-copy-id $(whoami)@$(hostname -I 2>/dev/null | awk '{print $1}')"
     return 1
   fi
   echo "Keys in authorized_keys:"
@@ -337,8 +358,9 @@ show-help() {
   echo -e "  ${LYELLOW}snap-restore${NC}       (when booted from snapshot) make it the default system, then reboot"
   echo ""
   echo -e "${BOLD}${LCYAN}SSH${NC}"
-  echo -e "  ${LYELLOW}ssh-lockdown${NC}  disable password auth (key-only, interactive)"
-  echo -e "  ${LYELLOW}ssh-unlock${NC}    re-enable password auth"
+  echo -e "  ${LYELLOW}ssh-add-client${NC}  append client pubkey to ~/.ssh/authorized_keys (paste or pass one line)"
+  echo -e "  ${LYELLOW}ssh-lockdown${NC}     disable password auth after keys are present (interactive)"
+  echo -e "  ${LYELLOW}ssh-unlock${NC}       re-enable password auth"
   echo -e "  ${GRAY}From client PC: ssh-copy-id user@server-ip${NC}"
   echo ""
   echo -e "${BOLD}${LCYAN}Config and misc${NC}"

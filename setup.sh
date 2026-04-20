@@ -398,21 +398,6 @@ SSHCFG
   fi
 }
 
-configure_sshd_disable_password() {
-  local drop="/etc/ssh/sshd_config.d/91-minidite-nopasswd.conf"
-  if [[ -d /etc/ssh/sshd_config.d ]]; then
-    sudo tee "$drop" >/dev/null <<'SSHCFG'
-# minidite: password auth disabled (key-only access)
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-SSHCFG
-  else
-    sudo grep -q 'PasswordAuthentication no' /etc/ssh/sshd_config 2>/dev/null || \
-      printf '\n# minidite: key-only\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
-        | sudo tee -a /etc/ssh/sshd_config >/dev/null
-  fi
-}
-
 podman_post_install() {
   sudo mkdir -p /etc/containers/registries.conf.d
   [[ ! -f /etc/containers/registries.conf.d/10-unqualified-search-registries.conf ]] && \
@@ -449,7 +434,6 @@ config_already=0
 
 openssh_installed=0; pacman -Q openssh &>/dev/null && openssh_installed=1
 has_key=0;  [[ -f "$HOME/.ssh/id_ed25519" || -f "$HOME/.ssh/id_rsa" ]] && has_key=1
-has_auth=0; [[ -f "$HOME/.ssh/authorized_keys" && -s "$HOME/.ssh/authorized_keys" ]] && has_auth=1
 docker_installed=0;  pacman -Q docker  &>/dev/null && docker_installed=1
 podman_installed=0;  pacman -Q podman  &>/dev/null && podman_installed=1
 omp_installed=0;     command -v oh-my-posh &>/dev/null && omp_installed=1
@@ -697,40 +681,6 @@ else
 fi
 echo ""
 
-# ---- Decisions: SSH authorized client key ----
-log_info "SSH client access (add your PC's public key for remote login)"
-if [[ $has_auth -eq 1 ]]; then
-  ADD_CLIENT_KEY="no"
-  log_ok "authorized_keys already has entries"
-  echo -e "  ${DIM}To add more keys later: paste into ~/.ssh/authorized_keys${NC}"
-else
-  echo -e "  ${DIM}To SSH without password, your CLIENT PC's public key must be on this server.${NC}"
-  echo -e "  ${DIM}On your PC run: ${YELLOW}cat ~/.ssh/id_ed25519.pub${DIM} then paste it here.${NC}"
-  echo -e "  ${DIM}If you skip now, you can add it later from your PC with:${NC}"
-  echo -e "  ${YELLOW}ssh-copy-id $(whoami)@<server-ip>${NC}"
-  ADD_CLIENT_KEY=$(read_yes_no "Add a client public key now? (yes/no): ")
-fi
-echo ""
-
-# ---- Decisions: Disable SSH password auth ----
-log_info "SSH password authentication"
-nopasswd_already=0
-[[ -f /etc/ssh/sshd_config.d/91-minidite-nopasswd.conf ]] && nopasswd_already=1
-grep -q 'PasswordAuthentication no' /etc/ssh/sshd_config 2>/dev/null && nopasswd_already=1
-if [[ $nopasswd_already -eq 1 ]]; then
-  DISABLE_SSH_PASS="no"
-  log_ok "Password auth already disabled"
-elif [[ $has_auth -eq 0 && "$ADD_CLIENT_KEY" != "yes" ]]; then
-  DISABLE_SSH_PASS="no"
-  log_info "Skipped (no client key in authorized_keys yet)"
-  echo -e "  ${DIM}After adding your client key, run: ${YELLOW}ssh-lockdown${DIM} to disable passwords.${NC}"
-else
-  echo -e "  ${YELLOW}WARNING:${NC} Only answer yes if you are sure your client key is working."
-  echo -e "  ${DIM}You can do this later with: ${YELLOW}ssh-lockdown${NC}"
-  DISABLE_SSH_PASS=$(read_yes_no "Disable SSH password authentication? (yes/no): ")
-fi
-echo ""
-
 # ---- Decisions: Docker ----
 log_info "Docker"
 if [[ $docker_installed -eq 1 ]]; then
@@ -902,12 +852,11 @@ else
 fi
 echo ""
 
-# ---- Step 6/13: SSH keys ----
-log_info "Step 6/13: SSH keys"
+# ---- Step 6/13: SSH server key (outgoing); client keys: ssh-add-client after login ----
+log_info "Step 6/13: SSH server key"
 mkdir -p "$HOME/.ssh"
 chmod 700 "$HOME/.ssh"
 
-# 6a: Server key pair
 if [[ "$GEN_SSH_KEY" == "yes" ]]; then
   ssh-keygen -t ed25519 -f "$HOME/.ssh/id_ed25519" -N "" -C "minidite-$(whoami)@$(hostname)"
   chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_ed25519.pub"
@@ -918,42 +867,6 @@ elif [[ $has_key -eq 1 ]]; then
   s_done "SSH: server key already present"
 else
   s_skip "SSH server key"
-fi
-
-# 6b: Client key for remote access
-if [[ "$ADD_CLIENT_KEY" == "yes" ]]; then
-  echo ""
-  echo -e "${BOLD}Paste your client's public key (one line, then press Enter):${NC}"
-  read -r client_pubkey </dev/tty
-  if [[ -n "$client_pubkey" ]]; then
-    echo "$client_pubkey" >> "$HOME/.ssh/authorized_keys"
-    chmod 600 "$HOME/.ssh/authorized_keys"
-    log_ok "Client key added to authorized_keys"
-    s_done "SSH: client public key added to authorized_keys"
-  else
-    log_warn "Empty input, skipped"
-    s_warn "SSH: client key input was empty"
-  fi
-elif [[ $has_auth -eq 1 ]]; then
-  s_done "SSH: authorized_keys already configured"
-else
-  s_skip "SSH client key"
-fi
-
-# 6c: Disable password authentication
-if [[ "$DISABLE_SSH_PASS" == "yes" ]]; then
-  auth_count=$(wc -l < "$HOME/.ssh/authorized_keys" 2>/dev/null || echo 0)
-  if [[ "$auth_count" -gt 0 ]]; then
-    configure_sshd_disable_password
-    sudo systemctl reload sshd.service 2>/dev/null || true
-    log_ok "Password authentication disabled (key-only access)"
-    s_done "SSH: password auth disabled (key-only)"
-  else
-    log_warn "No keys in authorized_keys! Keeping password auth enabled to avoid lockout."
-    s_warn "SSH: password auth NOT disabled (no client keys found)"
-  fi
-else
-  s_skip "SSH: password auth remains enabled"
 fi
 echo ""
 

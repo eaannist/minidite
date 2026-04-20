@@ -9,7 +9,7 @@ Minimal Arch Linux server: interactive install and setup. Kept as light as possi
 ## Features
 
 - **install.sh** (from [Arch ISO](https://archlinux.org/download/), root): minimal base only (base, linux, sudo, networkmanager, curl, **Limine**, **Snapper**; optional firmware; no openssh). Single Btrfs root (@) with @snapshots, Limine bootloader (minimal config; setup applies full config). Snapper is installed but configured in setup. See [install.sh](#installsh) below.
-- **setup.sh** (after first login, user): optional CLI packages, configs, optional OpenSSH, SSH keys (server + client, optional password disable), Docker/Podman, **Snapper config** (timeline: 5 daily, number: 5 manual), **Limine snapshot menu** (limine-snapper-sync; Minidite > linux | Snapshots). Re-run asks before overwriting configs. See [setup.sh](#setupsh) below.
+- **setup.sh** (after first login, user): optional CLI packages, configs, optional OpenSSH, optional SSH **server** key only; client keys and lockdown are via `ssh-add-client` / `ssh-lockdown` in `.bashrc`. Docker/Podman, **Snapper config** (timeline: 5 daily, number: 5 manual), **Limine snapshot menu** (limine-snapper-sync; Minidite > linux | Snapshots). Re-run asks before overwriting configs. See [setup.sh](#setupsh) below.
 
 ## Quick start
 
@@ -61,7 +61,7 @@ Run once as **root** from an Arch Linux live ISO. It performs a minimal installa
 
 ## setup.sh
 
-Run as **normal user** after first login (after install.sh and reboot). Optional CLI packages, configs, optional OpenSSH server and SSH keys, optional Docker/Podman.
+Run as **normal user** after first login (after install.sh and reboot). Optional CLI packages, configs, optional OpenSSH server and optional SSH **server** key for outgoing connections; client keys and password lockdown are **not** in setup (use `ssh-add-client` / `ssh-lockdown` in the Minidite shell). Optional Docker/Podman.
 
 **What it does:**
 
@@ -69,7 +69,7 @@ Run as **normal user** after first login (after install.sh and reboot). Optional
 2. **Directories:** ensures `~/.config/oh-my-posh`, `~/.config/micro`, `~/.config/fastfetch`, `~/.config/fzf`, `~/.local/bin`, `~/.cache/bash` exist.
 3. **Configs:** downloads from repo `home/` into `$HOME` (`.bashrc`, theme.omp.json, micro/fastfetch configs, minidite-version). Copies minidite-version to `/etc` for bootloader. Asks before overwriting if already run.
 4. **OpenSSH (optional):** install and harden (PermitRootLogin no, MaxAuthTries 3, drop-in configs).
-5. **SSH keys:** server key (for outgoing connections); client key (paste your PC's public key for remote login); optional disable password auth (only after client key is in authorized_keys). Use `ssh-lockdown` / `ssh-unlock` later.
+5. **SSH server key (optional):** generate `~/.ssh/id_ed25519` on this machine for outgoing connections. Add client keys and disable password auth later with `ssh-add-client` / `ssh-lockdown` (see `.bashrc`).
 6. **Snapper (optional):** if `/.snapshots` exists, configure root: timeline snapshots (5 daily via `snapper-timeline.timer`), number cleanup (5 manual), `snapper-cleanup.timer`.
 7. **Limine snapshot menu (optional):** install `limine-snapper-sync` and `limine-mkinitcpio-hook` from OPR (Omarchy Package Repository) or AUR (via yay). Syncs snapshots to boot menu; `limine-snapper-sync.service` for automatic updates.
 8. **Docker (optional):** engine + compose, docker.service, user in docker group.
